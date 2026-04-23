@@ -19,6 +19,7 @@ require('./config/db');
 const healthRoutes = require('./routes/health');
 const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
+const complaintsRoutes = require('./routes/complaints');
 const errorHandler = require('./middleware/errorHandler');
 const ApiError = require('./utils/apiError');
 
@@ -38,6 +39,7 @@ app.use('/api', healthRoutes);
 // Versioned API surface per api-spec.md
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/admin', adminRoutes);
+app.use('/api/v1/complaints', complaintsRoutes);
 
 // ── 404 and error handling ───────────────────────────────────────────────────
 app.use((req, res, next) => {
