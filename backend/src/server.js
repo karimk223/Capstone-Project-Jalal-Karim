@@ -21,6 +21,8 @@ const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
 const complaintsRoutes = require('./routes/complaints');
 const approvalsRoutes = require('./routes/approvals');
+const attachmentsRoutes = require('./routes/attachments');
+const attachmentsTopRoutes = require('./routes/attachmentsTop');
 const errorHandler = require('./middleware/errorHandler');
 const ApiError = require('./utils/apiError');
 
@@ -42,6 +44,8 @@ app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/admin', adminRoutes);
 app.use('/api/v1/complaints', complaintsRoutes);
 app.use('/api/v1/approvals', approvalsRoutes);
+app.use('/api/v1/complaints/:id/attachments', attachmentsRoutes);
+app.use('/api/v1/attachments', attachmentsTopRoutes);
 
 // ── 404 and error handling ───────────────────────────────────────────────────
 app.use((req, res, next) => {

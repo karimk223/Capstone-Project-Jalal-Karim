@@ -1,24 +1,24 @@
 /**
- * /api/v1/admin routes — all require the Admin role.
- * This file currently holds only staff creation; admin lookup-table management
- * (complaint-types, referral-destinations) will be added on Day 2 per api-spec.md §6.
+ * /api/v1/admin routes â€” all require Admin role.
+ * Implements FR-1 (create accounts), FR-4 (disable accounts).
+ * See api-spec.md Â§6.
  */
 
 const router = require('express').Router();
-const ctrl = require('../controllers/authController');
+const authCtrl = require('../controllers/authController');
+const adminCtrl = require('../controllers/adminController');
 const auth = require('../middleware/auth');
 const requireRole = require('../middleware/rbac');
 const validate = require('../middleware/validate');
-const schemas = require('../validators/authSchemas');
+const authSchemas = require('../validators/authSchemas');
+const adminSchemas = require('../validators/adminSchemas');
 
-// POST /admin/staff — create a new ministry account.
-// Implements FR-1 (account creation by admin). Addresses Gap 5 (server-side RBAC).
-router.post(
-  '/staff',
-  auth,
-  requireRole(['Admin']),
-  validate(schemas.createStaff),
-  ctrl.createStaff
-);
+// All admin routes require authentication + Admin role
+router.use(auth, requireRole(['Admin']));
+
+// Staff management
+router.get('/staff', adminCtrl.listStaff);
+router.post('/staff', validate(authSchemas.createStaff), authCtrl.createStaff);
+router.patch('/staff/:id', validate(adminSchemas.updateStaff), adminCtrl.updateStaff);
 
 module.exports = router;
