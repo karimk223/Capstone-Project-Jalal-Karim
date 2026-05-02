@@ -32,18 +32,78 @@ function duplicateFileNumberResponse(res) {
   });
 }
 
+function applySharedFilters(query, conditions, params) {
+  const {
+    search,
+    department_id,
+    type_id,
+    priority,
+    date_from,
+    date_to,
+    citizen_national_id,
+    file_number,
+    overdue,
+    resolved_this_month,
+  } = query;
+
+  if (department_id) {
+    conditions.push('c.department_id = ?');
+    params.push(parseInt(department_id, 10));
+  }
+
+  if (type_id) {
+    conditions.push('c.type_id = ?');
+    params.push(parseInt(type_id, 10));
+  }
+
+  if (priority) {
+    conditions.push('c.priority = ?');
+    params.push(priority);
+  }
+
+  if (date_from) {
+    conditions.push('c.submitted_at >= ?');
+    params.push(date_from);
+  }
+
+  if (date_to) {
+    conditions.push('c.submitted_at <= ?');
+    params.push(date_to);
+  }
+
+  if (citizen_national_id) {
+    conditions.push('ci.national_id = ?');
+    params.push(citizen_national_id);
+  }
+
+  if (file_number) {
+    conditions.push('c.file_number = ?');
+    params.push(file_number);
+  }
+
+  if (search && search.trim()) {
+    conditions.push('(ci.national_id LIKE ? OR c.file_number LIKE ?)');
+    params.push(`%${search.trim()}%`, `%${search.trim()}%`);
+  }
+
+  if (overdue === '1' || overdue === 'true') {
+    conditions.push(`cs.is_terminal = 0`);
+    conditions.push(`c.completion_deadline IS NOT NULL`);
+    conditions.push(`c.completion_deadline < CURDATE()`);
+  }
+
+  if (resolved_this_month === '1' || resolved_this_month === 'true') {
+    conditions.push(`c.resolved_at IS NOT NULL`);
+    conditions.push(`MONTH(c.resolved_at) = MONTH(CURDATE())`);
+    conditions.push(`YEAR(c.resolved_at) = YEAR(CURDATE())`);
+  }
+}
+
 exports.list = async (req, res) => {
   try {
     const {
-      search,
       status_id,
-      department_id,
-      type_id,
-      priority,
-      date_from,
-      date_to,
-      citizen_national_id,
-      file_number,
+      open,
       page = 1,
       limit = 20,
       sort_by = 'submitted_at',
@@ -61,59 +121,45 @@ exports.list = async (req, res) => {
     const params = [];
     const conditions = ['1=1'];
 
-    // Clerks can view/search all complaints for citizen follow-up.
-    // Editing is still restricted in exports.update.
+    // Shared filters: search, dates, priority, overdue, resolved_this_month, etc.
+    applySharedFilters(req.query, conditions, params);
 
     if (status_id) {
       conditions.push('c.status_id = ?');
       params.push(parseInt(status_id, 10));
     }
 
-    if (department_id) {
-      conditions.push('c.department_id = ?');
-      params.push(parseInt(department_id, 10));
-    }
-
-    if (type_id) {
-      conditions.push('c.type_id = ?');
-      params.push(parseInt(type_id, 10));
-    }
-
-    if (priority) {
-      conditions.push('c.priority = ?');
-      params.push(priority);
-    }
-
-    if (date_from) {
-      conditions.push('c.submitted_at >= ?');
-      params.push(date_from);
-    }
-
-    if (date_to) {
-      conditions.push('c.submitted_at <= ?');
-      params.push(date_to);
-    }
-
-    if (citizen_national_id) {
-      conditions.push('ci.national_id = ?');
-      params.push(citizen_national_id);
-    }
-
-    if (file_number) {
-      conditions.push('c.file_number = ?');
-      params.push(file_number);
-    }
-
-    if (search && search.trim()) {
-      conditions.push('(ci.national_id LIKE ? OR c.file_number LIKE ?)');
-      params.push(`%${search.trim()}%`, `%${search.trim()}%`);
+    if (open === '1' || open === 'true') {
+      conditions.push('cs.is_terminal = 0');
     }
 
     const where = conditions.join(' AND ');
 
+    const statusCountParams = [];
+    const statusCountConditions = ['1=1'];
+
+    // Same base filters for the cards, but without selected status/open filtering.
+    applySharedFilters(req.query, statusCountConditions, statusCountParams);
+
+    const statusCountWhere = statusCountConditions.join(' AND ');
+
+    const [statusCounts] = await db.execute(
+      `SELECT cs.status_id,
+              cs.status_name,
+              COUNT(c.complaint_id) AS count
+       FROM COMPLAINT_STATUS cs
+       LEFT JOIN COMPLAINTS c ON c.status_id = cs.status_id
+       LEFT JOIN CITIZENS ci ON c.citizen_id = ci.citizen_id
+       WHERE ${statusCountWhere}
+       GROUP BY cs.status_id, cs.status_name
+       ORDER BY cs.status_id ASC`,
+      statusCountParams
+    );
+
     const [countRows] = await db.execute(
       `SELECT COUNT(*) AS total
        FROM COMPLAINTS c
+       JOIN COMPLAINT_STATUS cs ON c.status_id = cs.status_id
        LEFT JOIN CITIZENS ci ON c.citizen_id = ci.citizen_id
        WHERE ${where}`,
       params
@@ -146,6 +192,10 @@ exports.list = async (req, res) => {
 
     return res.json({
       data: rows,
+      status_counts: statusCounts.map((row) => ({
+        ...row,
+        count: Number(row.count),
+      })),
       pagination: {
         page: safePage,
         limit: safeLimit,
@@ -445,6 +495,7 @@ exports.transition = async (req, res) => {
 
     if (rows.length === 0) {
       await conn.rollback();
+
       return res.status(404).json({
         code: 'NOT_FOUND',
         message: 'Complaint not found.',
@@ -459,6 +510,7 @@ exports.transition = async (req, res) => {
 
     if (is_terminal && roleId !== ROLE.ADMIN) {
       await conn.rollback();
+
       return res.status(400).json({
         code: 'TERMINAL_STATUS',
         message: `Complaint is in a terminal status (${fromStatusName}) and cannot be transitioned.`,
@@ -469,6 +521,7 @@ exports.transition = async (req, res) => {
 
     if (!allowedNext.includes(parseInt(to_status_id, 10))) {
       await conn.rollback();
+
       return res.status(400).json({
         code: 'INVALID_TRANSITION',
         message: `Cannot move from "${fromStatusName}" to status ${to_status_id}. Allowed: [${allowedNext.join(', ')}].`,
@@ -477,6 +530,7 @@ exports.transition = async (req, res) => {
 
     if (parseInt(to_status_id, 10) === 5 && (!comment || !comment.trim())) {
       await conn.rollback();
+
       return res.status(400).json({
         code: 'VALIDATION_FAILED',
         message: 'A comment is required when rejecting a complaint.',
