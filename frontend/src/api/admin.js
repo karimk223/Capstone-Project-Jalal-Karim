@@ -9,8 +9,8 @@ import apiClient from './client';
 
 /** List all staff members */
 export async function getStaff() {
-    const { data } = await apiClient.get('/api/v1/admin/staff');
-    return data.data; // unwrap the { data: [...] } wrapper
+  const { data } = await apiClient.get('/api/v1/admin/staff');
+  return data.data;
 }
 
 /**
@@ -23,11 +23,24 @@ export async function createStaff(payload) {
 }
 
 /**
- * Update a staff member — name, role, or is_active.
+ * Update a staff member — name, email, role, or is_active.
  * @param {number} staffId
- * @param {{ full_name?, role_id?, is_active? }} payload
+ * @param {{ full_name?, email?, role_id?, is_active? }} payload
  */
 export async function updateStaff(staffId, payload) {
   const { data } = await apiClient.patch(`/api/v1/admin/staff/${staffId}`, payload);
+  return data;
+}
+
+/**
+ * Admin reset password for a staff member.
+ * @param {number} staffId
+ * @param {string} password
+ */
+export async function resetStaffPassword(staffId, password) {
+  const { data } = await apiClient.patch(`/api/v1/admin/staff/${staffId}/password`, {
+    password,
+  });
+
   return data;
 }

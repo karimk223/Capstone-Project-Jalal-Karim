@@ -1,12 +1,5 @@
 /**
  * Joi schemas for /api/v1/admin routes.
- * PATCH /admin/staff/:id — update staff fields.
- *
- * Constraints from schema.sql STAFF table:
- *   full_name VARCHAR(100) NOT NULL
- *   email     VARCHAR(100) NOT NULL UNIQUE
- *   role_id   INT NOT NULL FK → ROLES (1-4)
- *   is_active TINYINT(1) NOT NULL DEFAULT 1
  */
 
 const Joi = require('joi');
@@ -18,4 +11,16 @@ const updateStaff = Joi.object({
   is_active: Joi.number().integer().valid(0, 1).optional(),
 }).min(1);
 
-module.exports = { updateStaff };
+const resetStaffPassword = Joi.object({
+  password: Joi.string().min(6).max(100).required().messages({
+    'any.required': 'New password is required.',
+    'string.empty': 'New password is required.',
+    'string.min': 'Password must be at least 6 characters.',
+    'string.max': 'Password must be at most 100 characters.',
+  }),
+});
+
+module.exports = {
+  updateStaff,
+  resetStaffPassword,
+};

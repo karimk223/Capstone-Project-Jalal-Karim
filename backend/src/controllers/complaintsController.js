@@ -34,9 +34,6 @@ function duplicateFileNumberResponse(res) {
 
 exports.list = async (req, res) => {
   try {
-    const roleId = req.user.role_id;
-    const staffId = req.user.staff_id;
-
     const {
       search,
       status_id,
@@ -64,10 +61,8 @@ exports.list = async (req, res) => {
     const params = [];
     const conditions = ['1=1'];
 
-    if (roleId === ROLE.CLERK) {
-      conditions.push('c.submitted_by = ?');
-      params.push(staffId);
-    }
+    // Clerks can view/search all complaints for citizen follow-up.
+    // Editing is still restricted in exports.update.
 
     if (status_id) {
       conditions.push('c.status_id = ?');
@@ -170,16 +165,6 @@ exports.list = async (req, res) => {
 exports.getById = async (req, res) => {
   try {
     const complaintId = parseInt(req.params.id, 10);
-    const roleId = req.user.role_id;
-    const staffId = req.user.staff_id;
-
-    let rbacCondition = '';
-    const rbacParams = [complaintId];
-
-    if (roleId === ROLE.CLERK) {
-      rbacCondition = 'AND c.submitted_by = ?';
-      rbacParams.push(staffId);
-    }
 
     const [rows] = await db.execute(
       `SELECT c.*,
@@ -198,8 +183,8 @@ exports.getById = async (req, res) => {
        JOIN COMPLAINT_TYPES ct ON c.type_id = ct.type_id
        LEFT JOIN STAFF s ON c.submitted_by = s.staff_id
        LEFT JOIN CITIZENS ci ON c.citizen_id = ci.citizen_id
-       WHERE c.complaint_id = ? ${rbacCondition}`,
-      rbacParams
+       WHERE c.complaint_id = ?`,
+      [complaintId]
     );
 
     if (rows.length === 0) {

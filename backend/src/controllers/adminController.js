@@ -4,12 +4,13 @@
  * FR-21 (Admin can deprecate lookup entries).
  * Addresses Gap 5 (server-side RBAC), Gap 9 (lookup management).
  *
- * B07: added createComplaintType, updateComplaintType,
- *      createReferralDestination, updateReferralDestination.
+ * Added:
+ * - Admin password reset for staff members.
  */
 
 const db = require('../config/db');
 const ApiError = require('../utils/apiError');
+const { hashPassword } = require('../utils/password');
 
 /** GET /admin/staff — List all staff members (no password_hash). */
 async function listStaff(req, res, next) {
@@ -21,17 +22,23 @@ async function listStaff(req, res, next) {
          JOIN ROLES r ON r.role_id = s.role_id
         ORDER BY s.staff_id ASC`
     );
+
     return res.json({ data: rows });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 }
 
-/** PATCH /admin/staff/:id — Update name, role, or is_active. */
+/** PATCH /admin/staff/:id — Update name, role, email, or is_active. */
 async function updateStaff(req, res, next) {
   try {
     const { id } = req.params;
+
     const [existing] = await db.execute(
-      'SELECT staff_id FROM STAFF WHERE staff_id = ?', [id]
+      'SELECT staff_id FROM STAFF WHERE staff_id = ?',
+      [id]
     );
+
     if (existing.length === 0) {
       return next(new ApiError(404, 'NOT_FOUND', 'Staff member not found.'));
     }
@@ -52,40 +59,86 @@ async function updateStaff(req, res, next) {
     }
 
     params.push(id);
+
     await db.execute(
-      `UPDATE STAFF SET ${setClauses.join(', ')} WHERE staff_id = ?`, params
+      `UPDATE STAFF SET ${setClauses.join(', ')} WHERE staff_id = ?`,
+      params
     );
 
     const [rows] = await db.execute(
       `SELECT s.staff_id, s.full_name, s.email, s.is_active, s.created_at,
               s.role_id, r.role_name
-         FROM STAFF s JOIN ROLES r ON r.role_id = s.role_id
+         FROM STAFF s
+         JOIN ROLES r ON r.role_id = s.role_id
         WHERE s.staff_id = ?`,
       [id]
     );
+
     return res.json({ staff: rows[0] });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 }
 
-// ── Lookup table management (B07 — FR-21) ──────────────────────────────────
+/** PATCH /admin/staff/:id/password — Admin reset staff password. */
+async function resetStaffPassword(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { password } = req.body;
+
+    const [existing] = await db.execute(
+      `SELECT staff_id, full_name, email
+         FROM STAFF
+        WHERE staff_id = ?`,
+      [id]
+    );
+
+    if (existing.length === 0) {
+      return next(new ApiError(404, 'NOT_FOUND', 'Staff member not found.'));
+    }
+
+    const password_hash = await hashPassword(password);
+
+    await db.execute(
+      `UPDATE STAFF
+          SET password_hash = ?
+        WHERE staff_id = ?`,
+      [password_hash, id]
+    );
+
+    return res.json({
+      message: `Password reset successfully for ${existing[0].full_name}.`,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ── Lookup table management ────────────────────────────────────────────────
 
 /** POST /admin/complaint-types — Create a new complaint type. */
 async function createComplaintType(req, res, next) {
   try {
     const { type_name } = req.body;
+
     if (!type_name || !type_name.trim()) {
       return next(new ApiError(400, 'VALIDATION_FAILED', 'type_name is required.'));
     }
+
     const [result] = await db.execute(
       'INSERT INTO COMPLAINT_TYPES (type_name, is_deprecated) VALUES (?, 0)',
       [type_name.trim()]
     );
+
     const [rows] = await db.execute(
       'SELECT type_id, type_name, is_deprecated FROM COMPLAINT_TYPES WHERE type_id = ?',
       [result.insertId]
     );
+
     return res.status(201).json(rows[0]);
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 }
 
 /** PATCH /admin/complaint-types/:id — Update or deprecate a complaint type. */
@@ -95,29 +148,47 @@ async function updateComplaintType(req, res, next) {
     const { type_name, is_deprecated } = req.body;
 
     const [existing] = await db.execute(
-      'SELECT type_id FROM COMPLAINT_TYPES WHERE type_id = ?', [id]
+      'SELECT type_id FROM COMPLAINT_TYPES WHERE type_id = ?',
+      [id]
     );
+
     if (existing.length === 0) {
       return next(new ApiError(404, 'NOT_FOUND', 'Complaint type not found.'));
     }
 
     const setClauses = [];
     const params = [];
-    if (type_name    !== undefined) { setClauses.push('type_name = ?');    params.push(type_name); }
-    if (is_deprecated !== undefined) { setClauses.push('is_deprecated = ?'); params.push(is_deprecated ? 1 : 0); }
+
+    if (type_name !== undefined) {
+      setClauses.push('type_name = ?');
+      params.push(type_name);
+    }
+
+    if (is_deprecated !== undefined) {
+      setClauses.push('is_deprecated = ?');
+      params.push(is_deprecated ? 1 : 0);
+    }
 
     if (setClauses.length === 0) {
       return next(new ApiError(400, 'VALIDATION_FAILED', 'No updatable fields provided.'));
     }
 
     params.push(id);
-    await db.execute(`UPDATE COMPLAINT_TYPES SET ${setClauses.join(', ')} WHERE type_id = ?`, params);
+
+    await db.execute(
+      `UPDATE COMPLAINT_TYPES SET ${setClauses.join(', ')} WHERE type_id = ?`,
+      params
+    );
 
     const [rows] = await db.execute(
-      'SELECT type_id, type_name, is_deprecated FROM COMPLAINT_TYPES WHERE type_id = ?', [id]
+      'SELECT type_id, type_name, is_deprecated FROM COMPLAINT_TYPES WHERE type_id = ?',
+      [id]
     );
+
     return res.json(rows[0]);
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 }
 
 /** POST /admin/referral-destinations — Create a new referral destination. */
@@ -126,27 +197,48 @@ async function createReferralDestination(req, res, next) {
     const { destination_name, category, personal_contact } = req.body;
 
     const VALID_CATEGORIES = [
-      'MUNICIPALITY','UNION','COMMITTEE','NGO',
-      'INTERNATIONAL_ORG','PRIVATE_COMPANY','GOVERNMENT_DIRECTORATE','ACTION',
+      'MUNICIPALITY',
+      'UNION',
+      'COMMITTEE',
+      'NGO',
+      'INTERNATIONAL_ORG',
+      'PRIVATE_COMPANY',
+      'GOVERNMENT_DIRECTORATE',
+      'ACTION',
     ];
 
     if (!destination_name || !destination_name.trim()) {
       return next(new ApiError(400, 'VALIDATION_FAILED', 'destination_name is required.'));
     }
+
     if (!category || !VALID_CATEGORIES.includes(category)) {
-      return next(new ApiError(400, 'VALIDATION_FAILED', `category must be one of: ${VALID_CATEGORIES.join(', ')}.`));
+      return next(
+        new ApiError(
+          400,
+          'VALIDATION_FAILED',
+          `category must be one of: ${VALID_CATEGORIES.join(', ')}.`
+        )
+      );
     }
 
     const [result] = await db.execute(
-      'INSERT INTO REFERRAL_DESTINATIONS (destination_name, category, personal_contact, is_deprecated) VALUES (?, ?, ?, 0)',
+      `INSERT INTO REFERRAL_DESTINATIONS
+         (destination_name, category, personal_contact, is_deprecated)
+       VALUES (?, ?, ?, 0)`,
       [destination_name.trim(), category, personal_contact || null]
     );
+
     const [rows] = await db.execute(
-      'SELECT destination_id, destination_name, category, personal_contact, is_deprecated FROM REFERRAL_DESTINATIONS WHERE destination_id = ?',
+      `SELECT destination_id, destination_name, category, personal_contact, is_deprecated
+         FROM REFERRAL_DESTINATIONS
+        WHERE destination_id = ?`,
       [result.insertId]
     );
+
     return res.status(201).json(rows[0]);
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 }
 
 /** PATCH /admin/referral-destinations/:id — Update or deprecate a destination. */
@@ -156,34 +248,57 @@ async function updateReferralDestination(req, res, next) {
     const { destination_name, is_deprecated } = req.body;
 
     const [existing] = await db.execute(
-      'SELECT destination_id FROM REFERRAL_DESTINATIONS WHERE destination_id = ?', [id]
+      'SELECT destination_id FROM REFERRAL_DESTINATIONS WHERE destination_id = ?',
+      [id]
     );
+
     if (existing.length === 0) {
       return next(new ApiError(404, 'NOT_FOUND', 'Referral destination not found.'));
     }
 
     const setClauses = [];
     const params = [];
-    if (destination_name !== undefined) { setClauses.push('destination_name = ?'); params.push(destination_name); }
-    if (is_deprecated    !== undefined) { setClauses.push('is_deprecated = ?');    params.push(is_deprecated ? 1 : 0); }
+
+    if (destination_name !== undefined) {
+      setClauses.push('destination_name = ?');
+      params.push(destination_name);
+    }
+
+    if (is_deprecated !== undefined) {
+      setClauses.push('is_deprecated = ?');
+      params.push(is_deprecated ? 1 : 0);
+    }
 
     if (setClauses.length === 0) {
       return next(new ApiError(400, 'VALIDATION_FAILED', 'No updatable fields provided.'));
     }
 
     params.push(id);
-    await db.execute(`UPDATE REFERRAL_DESTINATIONS SET ${setClauses.join(', ')} WHERE destination_id = ?`, params);
+
+    await db.execute(
+      `UPDATE REFERRAL_DESTINATIONS SET ${setClauses.join(', ')} WHERE destination_id = ?`,
+      params
+    );
 
     const [rows] = await db.execute(
-      'SELECT destination_id, destination_name, category, personal_contact, is_deprecated FROM REFERRAL_DESTINATIONS WHERE destination_id = ?',
+      `SELECT destination_id, destination_name, category, personal_contact, is_deprecated
+         FROM REFERRAL_DESTINATIONS
+        WHERE destination_id = ?`,
       [id]
     );
+
     return res.json(rows[0]);
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 }
 
 module.exports = {
-  listStaff, updateStaff,
-  createComplaintType, updateComplaintType,
-  createReferralDestination, updateReferralDestination,
+  listStaff,
+  updateStaff,
+  resetStaffPassword,
+  createComplaintType,
+  updateComplaintType,
+  createReferralDestination,
+  updateReferralDestination,
 };
