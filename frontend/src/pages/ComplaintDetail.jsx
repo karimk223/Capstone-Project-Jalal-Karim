@@ -1,17 +1,13 @@
 /**
  * src/pages/ComplaintDetail.jsx
  * Implements FR-11-14 (workflow), FR-19-20 (audit trail), FR-7 (attachments).
- * Addresses Gap 1 (status visible), Gap 2 (timeline), Gap 3 (attachments),
- * Gap 5 (RBAC-gated transition panel), Gap 6 (workflow enforcement).
- *
- * B03: added AttachmentUpload panel below the attachments list so staff can
- * upload files on an existing complaint, not only on the creation form.
  *
  * Updated:
- * - Fixed Status Journey branching:
- *   Rejected flow: Submitted → Under Review → Pending Approval → Rejected
- *   Approved flow: Submitted → Under Review → Pending Approval → Approved → Resolved → Closed
- * - Added tracking-based completion logic
+ * - Fixed Status Journey branching
+ * - Fixed status journey circles so they remain perfectly circular
+ * - Fixed status journey connector line to be clean and continuous
+ * - Fixed cropped circle rings by adding top padding
+ * - Added Overdue badge without replacing the real workflow status
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
@@ -50,6 +46,23 @@ function formatDateTime(iso) {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function isOverdueComplaint(item) {
+  if (!item?.completion_deadline) return false;
+
+  const status = String(item.status_name || '').toLowerCase();
+  const terminalStatuses = ['resolved', 'closed', 'rejected'];
+
+  if (terminalStatuses.includes(status)) return false;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const deadline = new Date(item.completion_deadline);
+  deadline.setHours(0, 0, 0, 0);
+
+  return deadline < today;
 }
 
 function DetailRow({ label, value }) {
@@ -259,31 +272,33 @@ function ComplaintJourney({ statuses, currentStatusName, tracking = [] }) {
   if (ordered.length === 0) return null;
 
   return (
-    <div className="overflow-x-auto">
-      <div className="flex min-w-max items-start gap-0 lg:min-w-0 lg:justify-between">
-        {ordered.map((status, index) => {
-          const theme = getStatusTheme(status.status_name);
-          const normalizedStatus = normalize(status.status_name);
+    <div className="w-full overflow-x-auto pb-2 pt-3">
+      <div className="relative min-w-[920px] px-6 pt-2">
+        <div className="absolute left-[74px] right-[74px] top-9 h-1 rounded-full bg-slate-200" />
 
-          const isCurrent = normalizedStatus === normalizedCurrent;
+        <div className="relative z-10 grid grid-flow-col auto-cols-fr items-start gap-6">
+          {ordered.map((status, index) => {
+            const theme = getStatusTheme(status.status_name);
+            const normalizedStatus = normalize(status.status_name);
 
-          const isCompleted =
-            !isCurrent &&
-            (
-              visited.has(normalizedStatus) ||
-              (currentIndex >= 0 && index < currentIndex)
-            );
+            const isCurrent = normalizedStatus === normalizedCurrent;
 
-          const isUpcoming = !isCurrent && !isCompleted;
+            const isCompleted =
+              !isCurrent &&
+              (
+                visited.has(normalizedStatus) ||
+                (currentIndex >= 0 && index < currentIndex)
+              );
 
-          return (
-            <div
-              key={status.status_id}
-              className="flex min-w-[152px] flex-1 items-center last:flex-none lg:last:flex-1"
-            >
-              <div className="flex w-full flex-col items-center text-center">
+            const isUpcoming = !isCurrent && !isCompleted;
+
+            return (
+              <div
+                key={status.status_id}
+                className="flex min-w-[120px] flex-col items-center text-center"
+              >
                 <div
-                  className={`flex h-11 w-11 items-center justify-center rounded-full text-sm font-bold shadow-sm ring-4 ${
+                  className={`flex h-14 w-14 min-h-[56px] min-w-[56px] shrink-0 items-center justify-center rounded-full text-base font-bold shadow-sm ring-4 ${
                     isCurrent || isCompleted
                       ? `${theme.step} ${theme.ring}`
                       : 'bg-slate-100 text-slate-500 ring-slate-100'
@@ -293,7 +308,7 @@ function ComplaintJourney({ statuses, currentStatusName, tracking = [] }) {
                 </div>
 
                 <p
-                  className={`mt-3 text-xs font-semibold uppercase tracking-[0.14em] ${
+                  className={`mt-3 min-h-[32px] text-xs font-semibold uppercase leading-4 tracking-[0.14em] ${
                     isCurrent ? theme.accent : 'text-slate-500'
                   }`}
                 >
@@ -310,17 +325,9 @@ function ComplaintJourney({ statuses, currentStatusName, tracking = [] }) {
                         : 'Stage'}
                 </p>
               </div>
-
-              {index < ordered.length - 1 && (
-                <div
-                  className={`mx-2 mt-5 hidden h-1 flex-1 rounded-full lg:block ${
-                    isCompleted ? theme.faint : 'bg-slate-200'
-                  }`}
-                />
-              )}
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -390,6 +397,7 @@ export default function ComplaintDetail() {
   if (!complaint) return null;
 
   const canUpload = staff && [1, 2, 3].includes(staff.role_id);
+  const overdue = isOverdueComplaint(complaint);
 
   return (
     <div className="page-shell">
@@ -421,6 +429,12 @@ export default function ComplaintDetail() {
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge statusName={complaint.status_name} />
             <PriorityBadge priority={complaint.priority} />
+
+            {overdue && (
+              <span className="inline-flex items-center rounded-full border border-red-200 bg-red-50 px-3 py-1 text-sm font-semibold text-red-700">
+                Overdue
+              </span>
+            )}
           </div>
         </div>
       </div>

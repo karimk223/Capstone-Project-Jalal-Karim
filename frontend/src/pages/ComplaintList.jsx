@@ -1,15 +1,17 @@
 /**
  * src/pages/ComplaintList.jsx
- * Implements FR-16 (structured filters), FR-17 (pagination + sort), FR-18
- * (plain-English empty state).
- *
  * Updated:
- * - Search by citizen national ID or file number
- * - Shows file number in the All Complaints table
+ * - Colored status overview cards
+ * - Added Overdue overview card that behaves like the other cards
+ * - Dashboard /complaints?overdue=1 opens with overdue filter applied
+ * - Status cards remain visible even when Overdue filter is active
+ * - Pending Approval card opens Approvals page
+ * - Fixed long status labels overflowing card borders
+ * - Overdue is shown as an extra red badge beside the real status
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { getComplaints } from '../api/complaints';
 import { getStatuses } from '../api/lookups';
@@ -23,6 +25,23 @@ function formatDate(iso) {
     month: 'short',
     year: 'numeric',
   });
+}
+
+function isOverdueComplaint(item) {
+  if (!item?.completion_deadline) return false;
+
+  const status = String(item.status_name || '').toLowerCase();
+  const terminalStatuses = ['resolved', 'closed', 'rejected'];
+
+  if (terminalStatuses.includes(status)) return false;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const deadline = new Date(item.completion_deadline);
+  deadline.setHours(0, 0, 0, 0);
+
+  return deadline < today;
 }
 
 function SortTh({ column, label, currentSort, currentDir, onSort }) {
@@ -47,19 +66,86 @@ function SortTh({ column, label, currentSort, currentDir, onSort }) {
   );
 }
 
+function getStatusCardClasses(label, active) {
+  const key = String(label).toLowerCase();
+
+  const tones = {
+    all: active
+      ? 'border-slate-400 bg-slate-100 ring-2 ring-slate-200'
+      : 'border-slate-200 bg-slate-50 hover:bg-slate-100',
+
+    submitted: active
+      ? 'border-blue-400 bg-blue-50 ring-2 ring-blue-200'
+      : 'border-blue-200 bg-blue-50 hover:bg-blue-100',
+
+    'under review': active
+      ? 'border-amber-400 bg-amber-50 ring-2 ring-amber-200'
+      : 'border-amber-200 bg-amber-50 hover:bg-amber-100',
+
+    'pending approval': active
+      ? 'border-violet-400 bg-violet-50 ring-2 ring-violet-200'
+      : 'border-violet-200 bg-violet-50 hover:bg-violet-100',
+
+    approved: active
+      ? 'border-emerald-400 bg-emerald-50 ring-2 ring-emerald-200'
+      : 'border-emerald-200 bg-emerald-50 hover:bg-emerald-100',
+
+    rejected: active
+      ? 'border-rose-400 bg-rose-50 ring-2 ring-rose-200'
+      : 'border-rose-200 bg-rose-50 hover:bg-rose-100',
+
+    resolved: active
+      ? 'border-teal-400 bg-teal-50 ring-2 ring-teal-200'
+      : 'border-teal-200 bg-teal-50 hover:bg-teal-100',
+
+    closed: active
+      ? 'border-gray-400 bg-gray-100 ring-2 ring-gray-200'
+      : 'border-gray-200 bg-gray-50 hover:bg-gray-100',
+
+    overdue: active
+      ? 'border-red-400 bg-red-50 ring-2 ring-red-200'
+      : 'border-red-200 bg-red-50 hover:bg-red-100',
+  };
+
+  return tones[key] || tones.all;
+}
+
+function StatusSummaryCard({ label, value, active, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`min-h-[112px] rounded-2xl border p-4 text-left transition hover:-translate-y-0.5 hover:shadow-md ${getStatusCardClasses(
+        label,
+        active
+      )}`}
+    >
+      <p className="max-w-full break-words text-[10px] font-bold uppercase leading-4 tracking-[0.14em] text-slate-500">
+        {label}
+      </p>
+
+      <p className="mt-2 text-2xl font-black text-slate-950">{value ?? 0}</p>
+    </button>
+  );
+}
+
 export default function ComplaintList() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [filters, setFilters] = useState({
-    search: '',
-    status_id: '',
-    priority: '',
-    date_from: '',
-    date_to: '',
+    search: searchParams.get('search') || '',
+    status_id: searchParams.get('status_id') || '',
+    priority: searchParams.get('priority') || '',
+    date_from: searchParams.get('date_from') || '',
+    date_to: searchParams.get('date_to') || '',
+    open: searchParams.get('open') || '',
+    overdue: searchParams.get('overdue') || '',
+    resolved_this_month: searchParams.get('resolved_this_month') || '',
   });
 
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(Number(searchParams.get('page')) || 1);
   const [sortBy, setSortBy] = useState('submitted_at');
   const [sortDir, setSortDir] = useState('desc');
 
@@ -68,6 +154,8 @@ export default function ComplaintList() {
   const [complaints, setComplaints] = useState([]);
   const [pagination, setPagination] = useState(null);
   const [statuses, setStatuses] = useState([]);
+  const [statusCounts, setStatusCounts] = useState([]);
+  const [overdueCount, setOverdueCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -75,12 +163,26 @@ export default function ComplaintList() {
     getStatuses().then(setStatuses).catch(() => {});
   }, []);
 
+  useEffect(() => {
+    const params = {};
+
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== '' && value != null) {
+        params[key] = value;
+      }
+    });
+
+    if (page > 1) params.page = String(page);
+
+    setSearchParams(params, { replace: true });
+  }, [filters, page, setSearchParams]);
+
   const fetchComplaints = useCallback(async () => {
     setIsLoading(true);
     setError(null);
 
     try {
-      const result = await getComplaints({
+      const displayResultPromise = getComplaints({
         ...filters,
         page,
         limit: LIMIT,
@@ -88,8 +190,44 @@ export default function ComplaintList() {
         sort_dir: sortDir,
       });
 
-      setComplaints(result.data);
-      setPagination(result.pagination);
+      /*
+       * This separate request keeps the normal status cards visible even when
+       * the page is currently filtered by Overdue.
+       */
+      const overviewResultPromise = getComplaints({
+        search: filters.search,
+        priority: filters.priority,
+        date_from: filters.date_from,
+        date_to: filters.date_to,
+        page: 1,
+        limit: 1,
+        sort_by: sortBy,
+        sort_dir: sortDir,
+      });
+
+      const overdueResultPromise = getComplaints({
+        search: filters.search,
+        priority: filters.priority,
+        date_from: filters.date_from,
+        date_to: filters.date_to,
+        overdue: '1',
+        page: 1,
+        limit: 1,
+        sort_by: sortBy,
+        sort_dir: sortDir,
+      });
+
+      const [displayResult, overviewResult, overdueResult] = await Promise.all([
+        displayResultPromise,
+        overviewResultPromise,
+        overdueResultPromise,
+      ]);
+
+      setComplaints(displayResult.data);
+      setPagination(displayResult.pagination);
+
+      setStatusCounts(overviewResult.status_counts || []);
+      setOverdueCount(overdueResult.pagination?.total || 0);
     } catch (err) {
       setError(err.message || t('complaints.list.errorLoading'));
     } finally {
@@ -104,7 +242,14 @@ export default function ComplaintList() {
   function handleFilterChange(e) {
     const { name, value } = e.target;
 
-    setFilters((prev) => ({ ...prev, [name]: value }));
+    setFilters((prev) => ({
+      ...prev,
+      [name]: value,
+      open: '',
+      overdue: '',
+      resolved_this_month: '',
+    }));
+
     setPage(1);
   }
 
@@ -115,7 +260,53 @@ export default function ComplaintList() {
       priority: '',
       date_from: '',
       date_to: '',
+      open: '',
+      overdue: '',
+      resolved_this_month: '',
     });
+
+    setPage(1);
+  }
+
+  function filterByStatus(status) {
+    const statusName = String(status.status_name || '').toLowerCase();
+
+    if (statusName === 'pending approval') {
+      navigate('/approvals');
+      return;
+    }
+
+    setFilters((prev) => ({
+      ...prev,
+      status_id: String(status.status_id),
+      open: '',
+      overdue: '',
+      resolved_this_month: '',
+    }));
+
+    setPage(1);
+  }
+
+  function filterByOverdue() {
+    setFilters((prev) => ({
+      ...prev,
+      status_id: '',
+      open: '',
+      overdue: '1',
+      resolved_this_month: '',
+    }));
+
+    setPage(1);
+  }
+
+  function showAllStatuses() {
+    setFilters((prev) => ({
+      ...prev,
+      status_id: '',
+      open: '',
+      overdue: '',
+      resolved_this_month: '',
+    }));
 
     setPage(1);
   }
@@ -130,6 +321,12 @@ export default function ComplaintList() {
 
     setPage(1);
   }
+
+  const hasAnyFilter = Object.values(filters).some(Boolean);
+  const totalStatusCount = statusCounts.reduce(
+    (sum, row) => sum + Number(row.count || 0),
+    0
+  );
 
   return (
     <div className="page-shell">
@@ -152,6 +349,41 @@ export default function ComplaintList() {
           {t('complaints.list.newButton')}
         </button>
       </div>
+
+      <section>
+        <p className="section-label">Status Overview</p>
+
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-9">
+          <StatusSummaryCard
+            label="All"
+            value={totalStatusCount}
+            active={
+              !filters.status_id &&
+              !filters.open &&
+              !filters.overdue &&
+              !filters.resolved_this_month
+            }
+            onClick={showAllStatuses}
+          />
+
+          {statusCounts.map((status) => (
+            <StatusSummaryCard
+              key={status.status_id}
+              label={status.status_name}
+              value={status.count}
+              active={String(filters.status_id) === String(status.status_id)}
+              onClick={() => filterByStatus(status)}
+            />
+          ))}
+
+          <StatusSummaryCard
+            label="Overdue"
+            value={overdueCount}
+            active={filters.overdue === '1'}
+            onClick={filterByOverdue}
+          />
+        </div>
+      </section>
 
       <div className="card mb-4 flex flex-wrap items-end gap-3 p-4">
         <div className="flex min-w-[280px] flex-1 flex-col gap-1">
@@ -236,7 +468,7 @@ export default function ComplaintList() {
           />
         </div>
 
-        {Object.values(filters).some(Boolean) && (
+        {hasAnyFilter && (
           <button
             type="button"
             onClick={clearFilters}
@@ -246,6 +478,24 @@ export default function ComplaintList() {
           </button>
         )}
       </div>
+
+      {filters.overdue && (
+        <div className="mb-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
+          Showing overdue complaints only.
+        </div>
+      )}
+
+      {filters.open && (
+        <div className="mb-4 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-700">
+          Showing open complaints only.
+        </div>
+      )}
+
+      {filters.resolved_this_month && (
+        <div className="mb-4 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+          Showing complaints resolved this month.
+        </div>
+      )}
 
       {isLoading && (
         <div className="py-12 text-center text-sm text-gray-500">
@@ -264,6 +514,7 @@ export default function ComplaintList() {
           <p className="text-sm font-medium text-gray-900">
             {t('complaints.list.emptyTitle')}
           </p>
+
           <p className="mt-1 text-sm text-gray-500">
             {t('complaints.list.emptyHint')}
           </p>
@@ -331,53 +582,65 @@ export default function ComplaintList() {
               </thead>
 
               <tbody className="divide-y divide-gray-100">
-                {complaints.map((c) => (
-                  <tr
-                    key={c.complaint_id}
-                    onClick={() => navigate(`/complaints/${c.complaint_id}`)}
-                    className="cursor-pointer transition-colors hover:bg-blue-50/70"
-                  >
-                    <td className="px-4 py-3 font-mono text-gray-500">
-                      #{c.complaint_id}
-                    </td>
+                {complaints.map((c) => {
+                  const overdue = isOverdueComplaint(c);
 
-                    <td className="px-4 py-3 font-mono text-gray-700">
-                      {c.file_number || '—'}
-                    </td>
+                  return (
+                    <tr
+                      key={c.complaint_id}
+                      onClick={() => navigate(`/complaints/${c.complaint_id}`)}
+                      className="cursor-pointer transition-colors hover:bg-blue-50/70"
+                    >
+                      <td className="px-4 py-3 font-mono text-gray-500">
+                        #{c.complaint_id}
+                      </td>
 
-                    <td className="px-4 py-3 font-medium text-gray-900">
-                      {c.title}
-                    </td>
+                      <td className="px-4 py-3 font-mono text-gray-700">
+                        {c.file_number || '—'}
+                      </td>
 
-                    <td className="px-4 py-3 font-mono text-gray-600">
-                      {c.citizen_national_id || '—'}
-                    </td>
+                      <td className="px-4 py-3 font-medium text-gray-900">
+                        {c.title}
+                      </td>
 
-                    <td className="px-4 py-3">
-                      <StatusBadge statusName={c.status_name} />
-                    </td>
+                      <td className="px-4 py-3 font-mono text-gray-600">
+                        {c.citizen_national_id || '—'}
+                      </td>
 
-                    <td className="px-4 py-3">
-                      <PriorityBadge priority={c.priority} />
-                    </td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-wrap gap-2">
+                          <StatusBadge statusName={c.status_name} />
 
-                    <td className="px-4 py-3 text-gray-600">
-                      {c.department_name ?? '—'}
-                    </td>
+                          {overdue && (
+                            <span className="inline-flex items-center rounded-full border border-red-200 bg-red-50 px-3 py-1 text-xs font-semibold text-red-700">
+                              Overdue
+                            </span>
+                          )}
+                        </div>
+                      </td>
 
-                    <td className="px-4 py-3 text-gray-600">
-                      {c.submitted_by_name}
-                    </td>
+                      <td className="px-4 py-3">
+                        <PriorityBadge priority={c.priority} />
+                      </td>
 
-                    <td className="px-4 py-3 text-gray-600">
-                      {formatDate(c.submitted_at)}
-                    </td>
+                      <td className="px-4 py-3 text-gray-600">
+                        {c.department_name ?? '—'}
+                      </td>
 
-                    <td className="px-4 py-3 text-gray-600">
-                      {formatDate(c.completion_deadline)}
-                    </td>
-                  </tr>
-                ))}
+                      <td className="px-4 py-3 text-gray-600">
+                        {c.submitted_by_name}
+                      </td>
+
+                      <td className="px-4 py-3 text-gray-600">
+                        {formatDate(c.submitted_at)}
+                      </td>
+
+                      <td className="px-4 py-3 text-gray-600">
+                        {formatDate(c.completion_deadline)}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
