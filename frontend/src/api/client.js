@@ -7,52 +7,57 @@
  *
  *   1. ONE place to set the base URL (read from VITE_API_BASE_URL or '' so
  *      the Vite dev proxy can take over).
- *   2. ONE place to inject the JWT into the Authorization header (request
- *      interceptor below).
- *   3. ONE place to normalize backend errors into a consistent shape so
- *      components can rely on `err.code` and `err.message` without parsing
- *      axios's nested response object every time.
+ *   2. ONE place to inject the JWT into the Authorization header.
+ *   3. ONE place to normalize backend errors into a consistent shape.
  *
- * Addresses Gap 7 (raw error codes leak to users) by guaranteeing every
- * caller receives a typed, human-readable error.
+ * Updated:
+ * - Supports both backend error formats:
+ *   { error: { code, message } }
+ *   { code, message }
+ * - This fixes invalid workflow messages showing as "Request failed".
  */
 
 import axios from 'axios';
 
-// In dev, leave VITE_API_BASE_URL empty and let the Vite proxy forward /api
-// to the backend. In production builds, set it to the absolute backend URL.
 const baseURL = import.meta.env.VITE_API_BASE_URL || '';
 
-// Storage key used by AuthContext. Defined here as well so the interceptor
-// can read it without importing React (interceptors run outside the React tree).
 export const TOKEN_STORAGE_KEY = 'mctcs_token';
 
 const apiClient = axios.create({
   baseURL,
   headers: { 'Content-Type': 'application/json' },
-  // 15s is generous for a localhost dev server; tighten later if needed.
   timeout: 15000,
 });
 
-// ── Request interceptor: attach the JWT if we have one ──────────────────────
 apiClient.interceptors.request.use((config) => {
-  // Read the token from localStorage on every request rather than caching it
-  // in a closure — keeps logout/login transitions instant.
   const token = localStorage.getItem(TOKEN_STORAGE_KEY);
+
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+
   return config;
 });
 
-// ── Response interceptor: normalize errors ──────────────────────────────────
-// The backend returns { error: { code, message } } per api-spec.md §9.
-// We unwrap that and re-throw a plain Error with .code and .status so callers
-// can do `catch (err) { if (err.code === 'INVALID_CREDENTIALS') ... }`.
+function extractApiError(data) {
+  const message =
+    data?.error?.message ||
+    data?.message ||
+    data?.errors?.[0]?.message ||
+    'Request failed';
+
+  const code =
+    data?.error?.code ||
+    data?.code ||
+    data?.errors?.[0]?.code ||
+    'UNKNOWN_ERROR';
+
+  return { message, code };
+}
+
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
-    // No response = network/CORS/timeout. The backend never saw the request.
     if (!error.response) {
       const networkErr = new Error('Network error');
       networkErr.code = 'NETWORK_ERROR';
@@ -61,12 +66,13 @@ apiClient.interceptors.response.use(
     }
 
     const { status, data } = error.response;
-    const apiErr = new Error(data?.error?.message || 'Request failed');
-    apiErr.code = data?.error?.code || 'UNKNOWN_ERROR';
-    apiErr.status = status;
+    const { message, code } = extractApiError(data);
 
-    // 401 with TOKEN_EXPIRED → clear the stale token so the next
-    // ProtectedRoute check kicks the user back to /login.
+    const apiErr = new Error(message);
+    apiErr.code = code;
+    apiErr.status = status;
+    apiErr.data = data;
+
     if (status === 401 && apiErr.code === 'TOKEN_EXPIRED') {
       localStorage.removeItem(TOKEN_STORAGE_KEY);
     }

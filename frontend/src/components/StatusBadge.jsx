@@ -1,6 +1,11 @@
 /**
  * StatusBadge.jsx
  * Reusable status pill used in the complaints table and detail header.
+ *
+ * Updated:
+ * - Prevents "Under Review" and "Pending Approval" from wrapping badly
+ * - Keeps dot aligned and circular
+ * - Keeps priority badges on one clean line
  */
 
 import { getStatusTheme } from '../utils/statusTheme';
@@ -14,18 +19,28 @@ const PRIORITY_COLORS = {
 
 export function StatusBadge({ statusName }) {
   const theme = getStatusTheme(statusName);
+
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${theme.badge}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${theme.dot}`} />
-      {statusName ?? '—'}
+    <span
+      className={`inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-semibold leading-none ${theme.badge}`}
+    >
+      <span className={`h-2 w-2 shrink-0 rounded-full ${theme.dot}`} />
+      <span className="whitespace-nowrap leading-none">
+        {statusName ?? '—'}
+      </span>
     </span>
   );
 }
 
 export function PriorityBadge({ priority }) {
-  const colorClass = PRIORITY_COLORS[String(priority || '').toLowerCase()] ?? 'border border-slate-200 bg-slate-100 text-slate-700';
+  const colorClass =
+    PRIORITY_COLORS[String(priority || '').toLowerCase()] ??
+    'border border-slate-200 bg-slate-100 text-slate-700';
+
   return (
-    <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${colorClass}`}>
+    <span
+      className={`inline-flex items-center justify-center whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-semibold leading-none ${colorClass}`}
+    >
       {priority ?? '—'}
     </span>
   );

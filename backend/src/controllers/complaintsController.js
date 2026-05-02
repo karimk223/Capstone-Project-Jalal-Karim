@@ -3,17 +3,43 @@ const db = require('../config/db');
 const ROLE = { ADMIN: 1, CLERK: 2, DIRECTOR: 3, MINISTER: 4 };
 
 const ALLOWED_TRANSITIONS = {
-  1: [2, 5],
-  2: [3, 5],
-  3: [4, 5],
-  4: [6],
-  6: [7],
+  1: [2, 5], // Submitted -> Under Review OR Rejected
+  2: [3, 5], // Under Review -> Pending Approval OR Rejected
+  3: [4, 5], // Pending Approval -> Approved OR Rejected
+  4: [6], // Approved -> Resolved
+  6: [7], // Resolved -> Closed
 };
 
 function deriveAction(toStatusId) {
   if (toStatusId === 5) return 'rejected';
   if (toStatusId === 4) return 'approved';
   return 'submitted';
+}
+
+function buildInvalidTransitionMessage({
+  fromStatusId,
+  fromStatusName,
+  toStatusId,
+  toStatusName,
+  allowedNextNames,
+}) {
+  if (Number(toStatusId) === Number(fromStatusId)) {
+    return `The complaint is already in "${fromStatusName}".`;
+  }
+
+  if (Number(toStatusId) < Number(fromStatusId)) {
+    return `Cannot change from "${fromStatusName}" back to "${toStatusName}". You cannot move to a previous state.`;
+  }
+
+  if (!allowedNextNames || allowedNextNames.length === 0) {
+    return `Cannot change from "${fromStatusName}" to "${toStatusName}". No further transitions are allowed from this state.`;
+  }
+
+  if (allowedNextNames.length === 1) {
+    return `Cannot change from "${fromStatusName}" to "${toStatusName}". You must change to "${allowedNextNames[0]}" first.`;
+  }
+
+  return `Cannot change from "${fromStatusName}" to "${toStatusName}". Allowed next statuses are: ${allowedNextNames.join(', ')}.`;
 }
 
 function generateFileNumber() {
@@ -121,7 +147,6 @@ exports.list = async (req, res) => {
     const params = [];
     const conditions = ['1=1'];
 
-    // Shared filters: search, dates, priority, overdue, resolved_this_month, etc.
     applySharedFilters(req.query, conditions, params);
 
     if (status_id) {
@@ -138,7 +163,6 @@ exports.list = async (req, res) => {
     const statusCountParams = [];
     const statusCountConditions = ['1=1'];
 
-    // Same base filters for the cards, but without selected status/open filtering.
     applySharedFilters(req.query, statusCountConditions, statusCountParams);
 
     const statusCountWhere = statusCountConditions.join(' AND ');
@@ -205,6 +229,7 @@ exports.list = async (req, res) => {
     });
   } catch (err) {
     console.error('complaintsController.list error:', err);
+
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'Failed to fetch complaints.',
@@ -281,6 +306,7 @@ exports.getById = async (req, res) => {
     return res.json({ ...rows[0], attachments, tracking, approvals });
   } catch (err) {
     console.error('complaintsController.getById error:', err);
+
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'Failed to fetch complaint.',
@@ -350,7 +376,10 @@ exports.create = async (req, res) => {
 
     console.error('complaintsController.create error:', err);
 
-    if (err.code === 'ER_DUP_ENTRY' && err.message.includes('uq_complaints_file_number')) {
+    if (
+      err.code === 'ER_DUP_ENTRY' &&
+      err.message.includes('uq_complaints_file_number')
+    ) {
       return duplicateFileNumberResponse(res);
     }
 
@@ -463,7 +492,10 @@ exports.update = async (req, res) => {
   } catch (err) {
     console.error('complaintsController.update error:', err);
 
-    if (err.code === 'ER_DUP_ENTRY' && err.message.includes('uq_complaints_file_number')) {
+    if (
+      err.code === 'ER_DUP_ENTRY' &&
+      err.message.includes('uq_complaints_file_number')
+    ) {
       return duplicateFileNumberResponse(res);
     }
 
@@ -484,6 +516,7 @@ exports.transition = async (req, res) => {
     const { to_status_id, comment } = req.body;
     const roleId = req.user.role_id;
     const staffId = req.user.staff_id;
+    const toStatusId = parseInt(to_status_id, 10);
 
     const [rows] = await conn.execute(
       `SELECT c.status_id, cs.is_terminal, cs.status_name
@@ -517,18 +550,51 @@ exports.transition = async (req, res) => {
       });
     }
 
+    const [targetRows] = await conn.execute(
+      'SELECT status_name FROM COMPLAINT_STATUS WHERE status_id = ?',
+      [toStatusId]
+    );
+
+    const toStatusName = targetRows[0]?.status_name || `status ${toStatusId}`;
+
     const allowedNext = ALLOWED_TRANSITIONS[fromStatusId] || [];
 
-    if (!allowedNext.includes(parseInt(to_status_id, 10))) {
+    let allowedNextNames = [];
+    if (allowedNext.length > 0) {
+      const placeholders = allowedNext.map(() => '?').join(', ');
+
+      const [allowedRows] = await conn.execute(
+        `SELECT status_id, status_name
+         FROM COMPLAINT_STATUS
+         WHERE status_id IN (${placeholders})`,
+        allowedNext
+      );
+
+      const allowedNameMap = new Map(
+        allowedRows.map((row) => [Number(row.status_id), row.status_name])
+      );
+
+      allowedNextNames = allowedNext
+        .map((statusId) => allowedNameMap.get(Number(statusId)))
+        .filter(Boolean);
+    }
+
+    if (!allowedNext.includes(toStatusId)) {
       await conn.rollback();
 
       return res.status(400).json({
         code: 'INVALID_TRANSITION',
-        message: `Cannot move from "${fromStatusName}" to status ${to_status_id}. Allowed: [${allowedNext.join(', ')}].`,
+        message: buildInvalidTransitionMessage({
+          fromStatusId,
+          fromStatusName,
+          toStatusId,
+          toStatusName,
+          allowedNextNames,
+        }),
       });
     }
 
-    if (parseInt(to_status_id, 10) === 5 && (!comment || !comment.trim())) {
+    if (toStatusId === 5 && (!comment || !comment.trim())) {
       await conn.rollback();
 
       return res.status(400).json({
@@ -537,13 +603,6 @@ exports.transition = async (req, res) => {
       });
     }
 
-    const [targetRows] = await conn.execute(
-      'SELECT status_name FROM COMPLAINT_STATUS WHERE status_id = ?',
-      [to_status_id]
-    );
-
-    const toStatusName = targetRows[0]?.status_name;
-
     await conn.execute(
       `INSERT INTO APPROVALS
          (complaint_id, approver_id, action, comment, action_at)
@@ -551,7 +610,7 @@ exports.transition = async (req, res) => {
       [
         complaintId,
         staffId,
-        deriveAction(parseInt(to_status_id, 10)),
+        deriveAction(toStatusId),
         comment || null,
       ]
     );
@@ -560,14 +619,20 @@ exports.transition = async (req, res) => {
       `INSERT INTO TRACKING
          (complaint_id, changed_by, from_status_id, to_status_id, notes, changed_at)
        VALUES (?, ?, ?, ?, ?, NOW())`,
-      [complaintId, staffId, fromStatusId, to_status_id, comment || null]
+      [
+        complaintId,
+        staffId,
+        fromStatusId,
+        toStatusId,
+        comment || null,
+      ]
     );
 
-    const resolvedAt = parseInt(to_status_id, 10) === 6 ? ', resolved_at = NOW()' : '';
+    const resolvedAt = toStatusId === 6 ? ', resolved_at = NOW()' : '';
 
     await conn.execute(
       `UPDATE COMPLAINTS SET status_id = ? ${resolvedAt} WHERE complaint_id = ?`,
-      [to_status_id, complaintId]
+      [toStatusId, complaintId]
     );
 
     await conn.commit();
