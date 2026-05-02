@@ -24,17 +24,19 @@
 
 ## Screenshots
 
-| Login | Dashboard (Director) |
+The screenshots below show the final implemented React interface. The original planning wireframes are still available under [`diagrams/wireframes`](diagrams/wireframes).
+
+| Login | Dashboard |
 |---|---|
-| ![Login](diagrams/wireframes/wireframe_01_login.png) | ![Dashboard](diagrams/wireframes/wireframe_05_approval_dashboard.png) |
+| ![Login](docs/screenshots/screenshot_01_login.png) | ![Dashboard](docs/screenshots/screenshot_02_dashboard.png) |
 
 | Complaints List | Complaint Detail |
 |---|---|
-| ![List](diagrams/wireframes/wireframe_02_complaints_list.png) | ![Detail](diagrams/wireframes/wireframe_03_complaint_detail.png) |
+| ![Complaints List](docs/screenshots/screenshot_03_complaints_list.png) | ![Complaint Detail](docs/screenshots/screenshot_04_complaint_detail.png) |
 
 | New Complaint | Reports |
 |---|---|
-| ![New](diagrams/wireframes/wireframe_04_new_complaint.png) | ![Reports](diagrams/wireframes/wireframe_07_reports.png) |
+| ![New Complaint](docs/screenshots/screenshot_05_new_complaint.png) | ![Reports](docs/screenshots/screenshot_06_reports.png) |
 
 ---
 
@@ -147,7 +149,7 @@ Go to **http://localhost:5173** in your browser. Log in with any of the demo acc
 | Role | Email | Password | What they can do |
 |---|---|---|---|
 | **Admin** | `admin@ministry.lb` | `Admin123!` | Full access — manage staff, lookup tables, see all complaints |
-| **Clerk** | `clerk@ministry.lb` | `Clerk123!` | Submit complaints, upload attachments, link citizens |
+| **Clerk** | `clerk@ministry.lb` | `Clerk123!` | Submit complaints, upload attachments, link citizens, search/view complaints for citizen follow-up |
 | **Director** | `director@ministry.lb` | `Director123!` | Review and transition complaint statuses, approve/reject |
 | **Minister** | `minister@ministry.lb` | `Minister123!` | System-wide read access and final approval authority |
 
@@ -163,7 +165,7 @@ Go to **http://localhost:5173** in your browser. Log in with any of the demo acc
 3. Fill in Title, Description, Category, Priority, Department, and Type.
 4. Optionally link a citizen by searching their name or national ID in the **Link Citizen** field.
 5. Optionally attach a PDF, JPEG, or PNG (max 10 MB).
-6. Click **Submit Complaint** — you are redirected to the complaint detail page with status **Submitted**.
+6. Click **Submit Complaint** — the system auto-generates a unique file number and redirects you to the complaint detail page with status **Submitted**.
 
 ### Approving / rejecting a complaint (Director)
 1. Log in as `director@ministry.lb`.
@@ -206,6 +208,7 @@ All routes except `POST /auth/login` require a `Bearer <token>` header.
 | GET | `/lookups/referral-destinations` | Any | Grouped by category |
 | POST | `/admin/staff` | Admin | Create staff account |
 | PATCH | `/admin/staff/:id` | Admin | Update role / disable account |
+| PATCH | `/admin/staff/:id/password` | Admin | Reset a staff member password |
 | PATCH | `/admin/complaint-types/:id` | Admin | Deprecate / restore type |
 | PATCH | `/admin/referral-destinations/:id` | Admin | Deprecate / restore destination |
 | GET | `/reports/summary` | Any | Aggregate stats for charts |
@@ -251,10 +254,13 @@ Capstone-Project-Jalal-Karim/
 │       │   └── admin/          # Admin-only pages (Register, LookupManagement)
 │       └── hooks/              # useAuth
 │
+├── docs/
+│   └── screenshots/            # Final implemented app screenshots used in README
+│
 └── diagrams/
     ├── ERD.png
     ├── architecture_three_tier.png
-    └── wireframes/
+    └── wireframes/             # Original planning wireframes
 ```
 
 ---
