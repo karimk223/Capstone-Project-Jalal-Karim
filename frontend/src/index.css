@@ -27,6 +27,7 @@ body {
   box-sizing: border-box;
 }
 
+/* Default app scrollbar */
 *::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -40,6 +41,36 @@ body {
 
 *::-webkit-scrollbar-track {
   background: rgba(241, 245, 249, 0.9);
+}
+
+/* Cleaner sidebar scrollbar */
+.sidebar-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
+}
+
+.sidebar-scroll::-webkit-scrollbar {
+  width: 7px;
+}
+
+.sidebar-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background: rgba(255, 255, 255, 0.28);
+  background-clip: padding-box;
+}
+
+.sidebar-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.48);
+  background-clip: padding-box;
+}
+
+.sidebar-scroll::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 @layer components {

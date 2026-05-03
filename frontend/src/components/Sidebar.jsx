@@ -66,7 +66,7 @@ export default function Sidebar() {
         {({ isActive }) => (
           <>
             <span
-              className={`flex h-9 w-9 items-center justify-center rounded-2xl text-sm shadow-inner transition ${
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl text-sm shadow-inner transition ${
                 isActive
                   ? 'bg-ministry-50 text-ministry-800 shadow-blue-950/5'
                   : 'bg-white/10 text-blue-50 shadow-white/5 group-hover:bg-white/15 group-hover:text-white'
@@ -75,7 +75,7 @@ export default function Sidebar() {
               {Icon && <Icon size={18} strokeWidth={2.15} />}
             </span>
 
-            <span>{t(link.labelKey)}</span>
+            <span className="truncate">{t(link.labelKey)}</span>
           </>
         )}
       </NavLink>
@@ -94,37 +94,47 @@ export default function Sidebar() {
 
           <div className="mt-4 grid grid-cols-2 gap-2">
             <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
-              <p className="text-[11px] uppercase tracking-[0.2em] text-blue-100/60">Role</p>
-              <p className="mt-1 text-sm font-semibold">{staff.role_name}</p>
+              <p className="text-[11px] uppercase tracking-[0.2em] text-blue-100/60">
+                Role
+              </p>
+              <p className="mt-1 truncate text-sm font-semibold">{staff.role_name}</p>
             </div>
 
             <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
-              <p className="text-[11px] uppercase tracking-[0.2em] text-blue-100/60">Workspace</p>
-              <p className="mt-1 text-sm font-semibold">Complaints</p>
+              <p className="text-[11px] uppercase tracking-[0.2em] text-blue-100/60">
+                Workspace
+              </p>
+              <p className="mt-1 truncate text-sm font-semibold">Complaints</p>
             </div>
           </div>
         </div>
 
         {/* Middle menu scrolls if screen is small */}
-        <nav className="relative min-h-0 flex-1 overflow-y-auto overflow-x-hidden pr-1">
-          <div className="flex flex-col gap-2">
-            {visibleNav.map(renderLink)}
+        <div className="relative min-h-0 flex-1">
+          <nav className="sidebar-scroll relative h-full overflow-y-auto overflow-x-hidden pr-2">
+            <div className="flex flex-col gap-2 pb-10">
+              {visibleNav.map(renderLink)}
 
-            {visibleAdmin.length > 0 && (
-              <>
-                <p className="mb-1 mt-5 px-3 text-[11px] font-bold uppercase tracking-[0.24em] text-blue-100/50">
-                  {t('nav.admin')}
-                </p>
-                {visibleAdmin.map(renderLink)}
-              </>
-            )}
-          </div>
-        </nav>
+              {visibleAdmin.length > 0 && (
+                <>
+                  <p className="mb-1 mt-5 px-3 text-[11px] font-bold uppercase tracking-[0.24em] text-blue-100/50">
+                    {t('nav.admin')}
+                  </p>
+                  {visibleAdmin.map(renderLink)}
+                </>
+              )}
+            </div>
+          </nav>
+
+          {/* Scroll hint: shows there are more menu items below */}
+          <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-6 bg-gradient-to-t from-ministry-900 via-ministry-900/70 to-transparent" />        </div>
 
         {/* Bottom user card always visible */}
         <div className="relative mt-4 shrink-0 rounded-[1.5rem] border border-white/10 bg-white/10 p-4 backdrop-blur-md">
           <p className="truncate text-sm font-semibold text-white">{staff.full_name}</p>
-          <p className="mt-1 text-xs text-blue-100/70">Signed in to the ministry portal</p>
+          <p className="mt-1 text-xs text-blue-100/70">
+            Signed in to the ministry portal
+          </p>
           <p className="mt-3 inline-flex rounded-full bg-white/10 px-2.5 py-1 text-xs text-blue-50/85">
             {staff.role_name}
           </p>
@@ -132,4 +142,4 @@ export default function Sidebar() {
       </div>
     </aside>
   );
-}
+} 
