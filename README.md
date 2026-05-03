@@ -179,6 +179,7 @@ Go to **http://localhost:5173** in your browser. Log in with any of the demo acc
 2. Click **Lookup Management** under Administration in the sidebar.
 3. Switch between **Complaint Types** and **Referral Destinations** tabs.
 4. Add new entries or click **Deprecate** to hide an entry from new complaint forms (historical records are preserved).
+5. Admins can also reset staff passwords from the User Management page if a user forgets their password.
 
 ### Viewing reports (any role)
 1. Click **Reports** in the sidebar.
