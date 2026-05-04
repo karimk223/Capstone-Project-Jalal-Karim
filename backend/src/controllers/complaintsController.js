@@ -2,44 +2,8 @@ const db = require('../config/db');
 
 const ROLE = { ADMIN: 1, CLERK: 2, DIRECTOR: 3, MINISTER: 4 };
 
-const ALLOWED_TRANSITIONS = {
-  1: [2, 5], // Submitted -> Under Review OR Rejected
-  2: [3, 5], // Under Review -> Pending Approval OR Rejected
-  3: [4, 5], // Pending Approval -> Approved OR Rejected
-  4: [6], // Approved -> Resolved
-  6: [7], // Resolved -> Closed
-};
-
-function deriveAction(toStatusId) {
-  if (toStatusId === 5) return 'rejected';
-  if (toStatusId === 4) return 'approved';
-  return 'submitted';
-}
-
-function buildInvalidTransitionMessage({
-  fromStatusId,
-  fromStatusName,
-  toStatusId,
-  toStatusName,
-  allowedNextNames,
-}) {
-  if (Number(toStatusId) === Number(fromStatusId)) {
-    return `The complaint is already in "${fromStatusName}".`;
-  }
-
-  if (Number(toStatusId) < Number(fromStatusId)) {
-    return `Cannot change from "${fromStatusName}" back to "${toStatusName}". You cannot move to a previous state.`;
-  }
-
-  if (!allowedNextNames || allowedNextNames.length === 0) {
-    return `Cannot change from "${fromStatusName}" to "${toStatusName}". No further transitions are allowed from this state.`;
-  }
-
-  if (allowedNextNames.length === 1) {
-    return `Cannot change from "${fromStatusName}" to "${toStatusName}". You must change to "${allowedNextNames[0]}" first.`;
-  }
-
-  return `Cannot change from "${fromStatusName}" to "${toStatusName}". Allowed next statuses are: ${allowedNextNames.join(', ')}.`;
+function roleName(req) {
+  return String(req.user?.role_name || '').trim();
 }
 
 function generateFileNumber() {
@@ -56,6 +20,12 @@ function duplicateFileNumberResponse(res) {
     code: 'DUPLICATE_FILE_NUMBER',
     message: 'A complaint with this file number already exists.',
   });
+}
+
+function deriveAction(toStatusId) {
+  if (Number(toStatusId) === 5) return 'rejected';
+  if (Number(toStatusId) === 4) return 'approved';
+  return 'submitted';
 }
 
 function applySharedFilters(query, conditions, params) {
@@ -123,6 +93,210 @@ function applySharedFilters(query, conditions, params) {
     conditions.push(`MONTH(c.resolved_at) = MONTH(CURDATE())`);
     conditions.push(`YEAR(c.resolved_at) = YEAR(CURDATE())`);
   }
+}
+
+async function getLatestDecision(conn, complaintId) {
+  const [rows] = await conn.execute(
+    `SELECT ap.approval_id,
+            ap.approver_id,
+            ap.action,
+            ap.action_at,
+            s.role_id,
+            r.role_name
+     FROM APPROVALS ap
+     JOIN STAFF s ON ap.approver_id = s.staff_id
+     JOIN ROLES r ON s.role_id = r.role_id
+     WHERE ap.complaint_id = ?
+       AND ap.action IN ('approved', 'rejected')
+     ORDER BY ap.action_at DESC, ap.approval_id DESC
+     LIMIT 1`,
+    [complaintId]
+  );
+
+  return rows[0] || null;
+}
+
+async function canTransitionComplaint({ conn, complaint, req, toStatusId }) {
+  const role = roleName(req);
+  const roleId = Number(req.user.role_id);
+  const staffId = Number(req.user.staff_id);
+  const fromStatusId = Number(complaint.status_id);
+  const submittedBy = Number(complaint.submitted_by);
+  const isOwner = submittedBy === staffId;
+
+  if (roleId === ROLE.ADMIN || role === 'Admin') {
+    return {
+      allowed: false,
+      code: 'ADMIN_WORKFLOW_FORBIDDEN',
+      message: 'Admins manage users and lookup tables, but cannot change complaint workflow status.',
+    };
+  }
+
+  if (fromStatusId === toStatusId) {
+    return {
+      allowed: false,
+      code: 'SAME_STATUS',
+      message: `The complaint is already in "${complaint.status_name}".`,
+    };
+  }
+
+  const latestDecision = await getLatestDecision(conn, complaint.complaint_id);
+  const latestDecisionByMinister =
+    latestDecision && Number(latestDecision.role_id) === ROLE.MINISTER;
+
+  if (role === 'Clerk') {
+    if (!isOwner) {
+      return {
+        allowed: false,
+        code: 'FORBIDDEN_OWNER',
+        message: 'Clerks can only change workflow status for complaints they submitted.',
+      };
+    }
+
+    const clerkAllowed = {
+      1: [2],
+      2: [3],
+      4: [6],
+      5: [1],
+      6: [7],
+    };
+
+    if ((clerkAllowed[fromStatusId] || []).includes(toStatusId)) {
+      return { allowed: true };
+    }
+
+    return {
+      allowed: false,
+      code: 'INVALID_CLERK_TRANSITION',
+      message:
+        'This workflow action is not available for clerks. Clerks can move their own complaints through review steps, return rejected complaints to Submitted, and close approved/resolved work.',
+    };
+  }
+
+  if (role === 'Director') {
+    if (latestDecisionByMinister && [4, 5].includes(toStatusId)) {
+      return {
+        allowed: false,
+        code: 'MINISTER_DECISION_LOCKED',
+        message: 'A Minister decision already exists. Directors cannot override or change a Minister decision.',
+      };
+    }
+
+    const directorAllowed = {
+      1: [2],
+      2: [3],
+      3: [4, 5],
+      4: [5, 6],
+      5: [1, 4],
+      6: [7],
+    };
+
+    if ((directorAllowed[fromStatusId] || []).includes(toStatusId)) {
+      if ([4, 5].includes(fromStatusId) && [4, 5].includes(toStatusId)) {
+        if (!latestDecision || Number(latestDecision.approver_id) !== staffId) {
+          return {
+            allowed: false,
+            code: 'DIRECTOR_DECISION_FORBIDDEN',
+            message: 'Directors can only edit their own approval/rejection decision, and cannot change another user’s decision.',
+          };
+        }
+      }
+
+      return { allowed: true };
+    }
+
+    return {
+      allowed: false,
+      code: 'INVALID_DIRECTOR_TRANSITION',
+      message: 'This workflow transition is not allowed for Directors from the current status.',
+    };
+  }
+
+  if (role === 'Minister') {
+    const ministerAllowed = {
+      1: [2, 4, 5],
+      2: [3, 4, 5],
+      3: [4, 5],
+      4: [5, 6],
+      5: [1, 4],
+      6: [4, 5, 7],
+      7: [4, 5],
+    };
+
+    if ((ministerAllowed[fromStatusId] || []).includes(toStatusId)) {
+      return { allowed: true };
+    }
+
+    return {
+      allowed: false,
+      code: 'INVALID_MINISTER_TRANSITION',
+      message: 'This workflow transition is not allowed for Ministers from the current status.',
+    };
+  }
+
+  return {
+    allowed: false,
+    code: 'FORBIDDEN_ROLE',
+    message: 'You do not have permission to perform this workflow action.',
+  };
+}
+
+function canEditComplaint({ complaint, req }) {
+  const role = roleName(req);
+  const roleId = Number(req.user.role_id);
+  const staffId = Number(req.user.staff_id);
+  const statusId = Number(complaint.status_id);
+  const isOwner = Number(complaint.submitted_by) === staffId;
+
+  if (roleId === ROLE.ADMIN || role === 'Admin') {
+    return {
+      allowed: false,
+      code: 'ADMIN_EDIT_FORBIDDEN',
+      message: 'Admins manage system users and lookup tables, but cannot edit complaint details.',
+    };
+  }
+
+  if (role === 'Clerk') {
+    if (!isOwner) {
+      return {
+        allowed: false,
+        code: 'FORBIDDEN_OWNER',
+        message: 'Clerks can only edit complaints they submitted.',
+      };
+    }
+
+    if (![1, 5].includes(statusId)) {
+      return {
+        allowed: false,
+        code: 'INVALID_EDIT_STATUS',
+        message: 'Clerks can edit their complaint only while it is Submitted or Rejected. If it was rejected, return it to Submitted and add the new supporting details.',
+      };
+    }
+
+    return { allowed: true };
+  }
+
+  if (role === 'Director') {
+    if ([7].includes(statusId)) {
+      return {
+        allowed: false,
+        code: 'CLOSED_EDIT_FORBIDDEN',
+        message: 'Directors cannot edit a Closed complaint.',
+      };
+    }
+
+    return { allowed: true };
+  }
+
+  if (role === 'Minister') {
+    return { allowed: true };
+  }
+
+  return {
+    allowed: false,
+    code: 'FORBIDDEN_ROLE',
+    message: 'You do not have permission to edit this complaint.',
+  };
 }
 
 exports.list = async (req, res) => {
@@ -201,13 +375,28 @@ exports.list = async (req, res) => {
               ct.type_name,
               s.full_name AS submitted_by_name,
               ci.full_name AS citizen_name,
-              ci.national_id AS citizen_national_id
+              ci.national_id AS citizen_national_id,
+              ap.action AS decision_action,
+              ap.action_at AS decision_at,
+              approver.full_name AS decision_by_name,
+              approver_role.role_name AS decision_by_role
        FROM COMPLAINTS c
        JOIN COMPLAINT_STATUS cs ON c.status_id = cs.status_id
        JOIN DEPARTMENTS d ON c.department_id = d.department_id
        JOIN COMPLAINT_TYPES ct ON c.type_id = ct.type_id
        LEFT JOIN STAFF s ON c.submitted_by = s.staff_id
        LEFT JOIN CITIZENS ci ON c.citizen_id = ci.citizen_id
+       LEFT JOIN APPROVALS ap
+         ON ap.approval_id = (
+           SELECT ap2.approval_id
+           FROM APPROVALS ap2
+           WHERE ap2.complaint_id = c.complaint_id
+             AND ap2.action IN ('approved', 'rejected')
+           ORDER BY ap2.action_at DESC, ap2.approval_id DESC
+           LIMIT 1
+         )
+       LEFT JOIN STAFF approver ON ap.approver_id = approver.staff_id
+       LEFT JOIN ROLES approver_role ON approver.role_id = approver_role.role_id
        WHERE ${where}
        ORDER BY c.${safeSort} ${safeSortDir}
        LIMIT ? OFFSET ?`,
@@ -295,11 +484,14 @@ exports.getById = async (req, res) => {
     );
 
     const [approvals] = await db.execute(
-      `SELECT ap.*, s.full_name AS approver_name
+      `SELECT ap.*,
+              s.full_name AS approver_name,
+              r.role_name AS approver_role
        FROM APPROVALS ap
        JOIN STAFF s ON ap.approver_id = s.staff_id
+       JOIN ROLES r ON s.role_id = r.role_id
        WHERE ap.complaint_id = ?
-       ORDER BY ap.action_at DESC`,
+       ORDER BY ap.action_at DESC, ap.approval_id DESC`,
       [complaintId]
     );
 
@@ -395,11 +587,15 @@ exports.create = async (req, res) => {
 exports.update = async (req, res) => {
   try {
     const complaintId = parseInt(req.params.id, 10);
-    const roleId = req.user.role_id;
-    const staffId = req.user.staff_id;
 
     const [rows] = await db.execute(
-      'SELECT submitted_by FROM COMPLAINTS WHERE complaint_id = ?',
+      `SELECT c.complaint_id,
+              c.submitted_by,
+              c.status_id,
+              cs.status_name
+       FROM COMPLAINTS c
+       JOIN COMPLAINT_STATUS cs ON c.status_id = cs.status_id
+       WHERE c.complaint_id = ?`,
       [complaintId]
     );
 
@@ -410,25 +606,24 @@ exports.update = async (req, res) => {
       });
     }
 
-    const isOwner = roleId === ROLE.CLERK && rows[0].submitted_by === staffId;
-    const isPrivileged = [ROLE.DIRECTOR, ROLE.MINISTER, ROLE.ADMIN].includes(roleId);
+    const permission = canEditComplaint({ complaint: rows[0], req });
 
-    if (!isOwner && !isPrivileged) {
+    if (!permission.allowed) {
       return res.status(403).json({
-        code: 'FORBIDDEN_ROLE',
-        message: 'You cannot edit this complaint.',
+        code: permission.code,
+        message: permission.message,
       });
     }
 
     const {
       title,
       description,
+      category,
       priority,
       completion_deadline,
       department_id,
       type_id,
       citizen_id,
-      file_number,
     } = req.body;
 
     const setParts = [];
@@ -436,12 +631,17 @@ exports.update = async (req, res) => {
 
     if (title !== undefined) {
       setParts.push('title = ?');
-      params.push(title);
+      params.push(title.trim());
     }
 
     if (description !== undefined) {
       setParts.push('description = ?');
-      params.push(description);
+      params.push(description.trim());
+    }
+
+    if (category !== undefined) {
+      setParts.push('category = ?');
+      params.push(category.trim());
     }
 
     if (priority !== undefined) {
@@ -469,11 +669,6 @@ exports.update = async (req, res) => {
       params.push(citizen_id || null);
     }
 
-    if (file_number !== undefined) {
-      setParts.push('file_number = ?');
-      params.push(file_number.trim());
-    }
-
     if (setParts.length === 0) {
       return res.status(400).json({
         code: 'VALIDATION_FAILED',
@@ -492,13 +687,6 @@ exports.update = async (req, res) => {
   } catch (err) {
     console.error('complaintsController.update error:', err);
 
-    if (
-      err.code === 'ER_DUP_ENTRY' &&
-      err.message.includes('uq_complaints_file_number')
-    ) {
-      return duplicateFileNumberResponse(res);
-    }
-
     return res.status(500).json({
       code: 'INTERNAL_ERROR',
       message: 'Failed to update complaint.',
@@ -514,12 +702,14 @@ exports.transition = async (req, res) => {
 
     const complaintId = parseInt(req.params.id, 10);
     const { to_status_id, comment } = req.body;
-    const roleId = req.user.role_id;
     const staffId = req.user.staff_id;
     const toStatusId = parseInt(to_status_id, 10);
 
     const [rows] = await conn.execute(
-      `SELECT c.status_id, cs.is_terminal, cs.status_name
+      `SELECT c.complaint_id,
+              c.submitted_by,
+              c.status_id,
+              cs.status_name
        FROM COMPLAINTS c
        JOIN COMPLAINT_STATUS cs ON c.status_id = cs.status_id
        WHERE c.complaint_id = ?`,
@@ -535,62 +725,37 @@ exports.transition = async (req, res) => {
       });
     }
 
-    const {
-      status_id: fromStatusId,
-      is_terminal,
-      status_name: fromStatusName,
-    } = rows[0];
-
-    if (is_terminal && roleId !== ROLE.ADMIN) {
-      await conn.rollback();
-
-      return res.status(400).json({
-        code: 'TERMINAL_STATUS',
-        message: `Complaint is in a terminal status (${fromStatusName}) and cannot be transitioned.`,
-      });
-    }
+    const complaint = rows[0];
 
     const [targetRows] = await conn.execute(
       'SELECT status_name FROM COMPLAINT_STATUS WHERE status_id = ?',
       [toStatusId]
     );
 
-    const toStatusName = targetRows[0]?.status_name || `status ${toStatusId}`;
-
-    const allowedNext = ALLOWED_TRANSITIONS[fromStatusId] || [];
-
-    let allowedNextNames = [];
-    if (allowedNext.length > 0) {
-      const placeholders = allowedNext.map(() => '?').join(', ');
-
-      const [allowedRows] = await conn.execute(
-        `SELECT status_id, status_name
-         FROM COMPLAINT_STATUS
-         WHERE status_id IN (${placeholders})`,
-        allowedNext
-      );
-
-      const allowedNameMap = new Map(
-        allowedRows.map((row) => [Number(row.status_id), row.status_name])
-      );
-
-      allowedNextNames = allowedNext
-        .map((statusId) => allowedNameMap.get(Number(statusId)))
-        .filter(Boolean);
-    }
-
-    if (!allowedNext.includes(toStatusId)) {
+    if (targetRows.length === 0) {
       await conn.rollback();
 
       return res.status(400).json({
-        code: 'INVALID_TRANSITION',
-        message: buildInvalidTransitionMessage({
-          fromStatusId,
-          fromStatusName,
-          toStatusId,
-          toStatusName,
-          allowedNextNames,
-        }),
+        code: 'INVALID_STATUS',
+        message: 'Target status does not exist.',
+      });
+    }
+
+    const toStatusName = targetRows[0].status_name;
+
+    const permission = await canTransitionComplaint({
+      conn,
+      complaint,
+      req,
+      toStatusId,
+    });
+
+    if (!permission.allowed) {
+      await conn.rollback();
+
+      return res.status(403).json({
+        code: permission.code,
+        message: permission.message,
       });
     }
 
@@ -603,17 +768,19 @@ exports.transition = async (req, res) => {
       });
     }
 
-    await conn.execute(
-      `INSERT INTO APPROVALS
-         (complaint_id, approver_id, action, comment, action_at)
-       VALUES (?, ?, ?, ?, NOW())`,
-      [
-        complaintId,
-        staffId,
-        deriveAction(toStatusId),
-        comment || null,
-      ]
-    );
+    if ([4, 5].includes(toStatusId)) {
+      await conn.execute(
+        `INSERT INTO APPROVALS
+           (complaint_id, approver_id, action, comment, action_at)
+         VALUES (?, ?, ?, ?, NOW())`,
+        [
+          complaintId,
+          staffId,
+          deriveAction(toStatusId),
+          comment || null,
+        ]
+      );
+    }
 
     await conn.execute(
       `INSERT INTO TRACKING
@@ -622,16 +789,23 @@ exports.transition = async (req, res) => {
       [
         complaintId,
         staffId,
-        fromStatusId,
+        complaint.status_id,
         toStatusId,
         comment || null,
       ]
     );
 
-    const resolvedAt = toStatusId === 6 ? ', resolved_at = NOW()' : '';
+    let resolvedAtSql = '';
+    if (toStatusId === 6) {
+      resolvedAtSql = ', resolved_at = NOW()';
+    }
+
+    if ([1, 2, 3, 4, 5].includes(toStatusId)) {
+      resolvedAtSql = ', resolved_at = NULL';
+    }
 
     await conn.execute(
-      `UPDATE COMPLAINTS SET status_id = ? ${resolvedAt} WHERE complaint_id = ?`,
+      `UPDATE COMPLAINTS SET status_id = ? ${resolvedAtSql} WHERE complaint_id = ?`,
       [toStatusId, complaintId]
     );
 
@@ -639,7 +813,7 @@ exports.transition = async (req, res) => {
 
     return res.json({
       complaint_id: complaintId,
-      from_status: fromStatusName,
+      from_status: complaint.status_name,
       to_status: toStatusName,
       changed_at: new Date().toISOString(),
     });

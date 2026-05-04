@@ -1,22 +1,15 @@
 /**
- * src/components/StatusTransitionPanel.jsx
- * Implements FR-11 (status transitions), FR-12 (invalid transition rejection),
- * FR-13 (comment required for rejection), FR-14 (terminal status guard).
- * Addresses Gap 1 (no status field in legacy), Gap 6 (workflow enforcement).
- *
- * Updated:
- * - Shows clear backend workflow error messages instead of generic "Request failed"
- * - Keeps all statuses in dropdown except the current one
- * - Keeps RBAC client-side gate for Director, Minister, and Admin
+ * StatusTransitionPanel.jsx
+ * Role-aware status transition panel.
  */
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { transitionComplaint } from '../api/complaints';
 import useAuth from '../hooks/useAuth';
 
-const TRANSITION_ROLES = ['Director', 'Minister', 'Admin'];
-const COMMENT_REQUIRED_STATUS_IDS = [5]; // 5 = Rejected
+const TRANSITION_ROLES = ['Clerk', 'Director', 'Minister'];
+const COMMENT_REQUIRED_STATUS_IDS = [5];
 
 function getErrorMessage(err, fallback) {
   return (
@@ -25,6 +18,82 @@ function getErrorMessage(err, fallback) {
     err?.message ||
     fallback
   );
+}
+
+function normalize(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function isOwner(staff, complaint) {
+  return Number(staff?.staff_id) === Number(complaint?.submitted_by);
+}
+
+function getAvailableStatusesForRole({ staff, complaint, statuses }) {
+  if (!staff || !complaint) return [];
+
+  const role = staff.role_name;
+  const current = Number(complaint.status_id);
+  const owner = isOwner(staff, complaint);
+
+  let allowedIds = [];
+
+  if (role === 'Clerk') {
+    if (!owner) return [];
+
+    if (current === 1) allowedIds = [2];
+    if (current === 2) allowedIds = [3];
+    if (current === 4) allowedIds = [6];
+    if (current === 6) allowedIds = [7];
+    if (current === 5) allowedIds = [1];
+  }
+
+  if (role === 'Director') {
+    if (current === 1) allowedIds = [2];
+    if (current === 2) allowedIds = [3];
+    if (current === 3) allowedIds = [4, 5];
+    if (current === 4) allowedIds = [5, 6];
+    if (current === 5) allowedIds = [1, 4];
+    if (current === 6) allowedIds = [7];
+  }
+
+  if (role === 'Minister') {
+    if (current === 1) allowedIds = [2, 4, 5];
+    if (current === 2) allowedIds = [3, 4, 5];
+    if (current === 3) allowedIds = [4, 5];
+    if (current === 4) allowedIds = [5, 6];
+    if (current === 5) allowedIds = [1, 4];
+    if (current === 6) allowedIds = [4, 5, 7];
+    if (current === 7) allowedIds = [4, 5];
+  }
+
+  return statuses.filter((s) => allowedIds.includes(Number(s.status_id)));
+}
+
+function getRoleHint(staff, complaint) {
+  const role = staff?.role_name;
+  const currentStatus = normalize(complaint?.status_name);
+
+  if (role === 'Clerk') {
+    if (!isOwner(staff, complaint)) {
+      return 'Only the clerk who submitted this complaint can move it through clerk workflow steps.';
+    }
+
+    if (currentStatus === 'rejected') {
+      return 'You can return this rejected complaint to Submitted, edit it, and send it through the workflow again.';
+    }
+
+    return 'You can move your own complaint through review steps, and after a decision you can mark it Resolved and Closed.';
+  }
+
+  if (role === 'Director') {
+    return 'Directors can review complaints, approve or reject them, and revise their own decisions unless a Minister decision exists.';
+  }
+
+  if (role === 'Minister') {
+    return 'Ministers can make or override approval decisions, including Director decisions.';
+  }
+
+  return '';
 }
 
 export default function StatusTransitionPanel({
@@ -41,30 +110,15 @@ export default function StatusTransitionPanel({
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
-  // Don't render for Clerks.
   if (!TRANSITION_ROLES.includes(staff?.role_name)) return null;
 
-  const currentStatus = statuses.find(
-    (s) => Number(s.status_id) === Number(complaint.status_id)
-  );
-
-  if (currentStatus?.is_terminal) {
-    return (
-      <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
-        <p className="text-sm text-gray-500">
-          {t('complaints.transition.terminalMessage')}
-        </p>
-      </div>
-    );
-  }
-
-  // Keep all possible statuses except current one.
-  // Invalid choices are handled by the backend and displayed clearly.
-  const availableStatuses = statuses.filter(
-    (s) => Number(s.status_id) !== Number(complaint.status_id)
+  const availableStatuses = useMemo(
+    () => getAvailableStatusesForRole({ staff, complaint, statuses }),
+    [staff, complaint, statuses]
   );
 
   const commentRequired = COMMENT_REQUIRED_STATUS_IDS.includes(Number(toStatusId));
+  const roleHint = getRoleHint(staff, complaint);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -98,22 +152,45 @@ export default function StatusTransitionPanel({
         await onTransitionDone();
       }
     } catch (err) {
-      const backendMessage = getErrorMessage(
-        err,
-        t('complaints.transition.errorGeneric')
+      setError(
+        getErrorMessage(err, t('complaints.transition.errorGeneric'))
       );
-
-      setError(backendMessage);
     } finally {
       setIsSubmitting(false);
     }
   }
 
+  if (availableStatuses.length === 0) {
+    return (
+      <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-gray-500">
+          {t('complaints.transition.title')}
+        </h2>
+
+        <p className="text-sm text-gray-500">
+          No workflow action is available for your role at this stage.
+        </p>
+
+        {roleHint && (
+          <p className="mt-2 text-xs text-slate-400">
+            {roleHint}
+          </p>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
-      <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-gray-500">
+      <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-gray-500">
         {t('complaints.transition.title')}
       </h2>
+
+      {roleHint && (
+        <p className="mb-4 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+          {roleHint}
+        </p>
+      )}
 
       {success && (
         <div className="mb-3 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">
