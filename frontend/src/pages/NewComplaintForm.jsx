@@ -1,12 +1,14 @@
 /**
  * src/pages/NewComplaintForm.jsx
- * Implements FR-5 (create complaint), FR-6 (auto status=Submitted + TRACKING),
- * FR-7 (file attachment), FR-8 (is_scanned flip), FR-9 (citizen linking).
+ * Implements FR-5, FR-6, FR-7, FR-8, FR-9.
  *
  * Updated:
  * - file_number is auto-generated
  * - file_number is shown as read-only
  * - file_number is always sent to backend
+ * - citizen phone number accepts numbers only
+ * - attachment is required
+ * - attachment label now says "Attachment *" instead of "Attachment (optional) *"
  */
 
 import { useState, useEffect } from 'react';
@@ -28,6 +30,10 @@ const COMPLAINT_CATEGORIES = [
   'Citizen Services',
   'Other',
 ];
+
+function onlyNumbers(value) {
+  return String(value || '').replace(/\D/g, '');
+}
 
 function generateFileNumber() {
   const now = new Date();
@@ -58,6 +64,7 @@ function CitizenSearch({ onSelect }) {
   const [searching, setSearching] = useState(false);
   const [selected, setSelected] = useState(null);
   const [showCreate, setShowCreate] = useState(false);
+
   const [createForm, setCreateForm] = useState({
     national_id: '',
     full_name: '',
@@ -65,6 +72,7 @@ function CitizenSearch({ onSelect }) {
     email: '',
     address: '',
   });
+
   const [createError, setCreateError] = useState('');
   const [creating, setCreating] = useState(false);
 
@@ -78,7 +86,9 @@ function CitizenSearch({ onSelect }) {
     onSelect(null);
 
     try {
-      const res = await apiClient.get(`/api/v1/citizens?q=${encodeURIComponent(query.trim())}`);
+      const res = await apiClient.get(
+        `/api/v1/citizens?q=${encodeURIComponent(query.trim())}`
+      );
       setResults(res.data);
     } catch {
       setResults([]);
@@ -117,6 +127,7 @@ function CitizenSearch({ onSelect }) {
       const res = await apiClient.post('/api/v1/citizens', createForm);
       handleSelect(res.data);
       setShowCreate(false);
+
       setCreateForm({
         national_id: '',
         full_name: '',
@@ -125,11 +136,10 @@ function CitizenSearch({ onSelect }) {
         address: '',
       });
     } catch (err) {
-      const code = err.code;
       setCreateError(
-        code === 'DUPLICATE_NATIONAL_ID'
-          ? 'A citizen with this national ID already exists.'
-          : err.message || 'Could not create citizen.'
+        err?.response?.data?.message ||
+          err?.message ||
+          'Could not create citizen.'
       );
     } finally {
       setCreating(false);
@@ -171,7 +181,9 @@ function CitizenSearch({ onSelect }) {
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleSearch())}
+              onKeyDown={(e) =>
+                e.key === 'Enter' && (e.preventDefault(), handleSearch())
+              }
               placeholder="Search by name or national ID…"
               className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             />
@@ -222,7 +234,9 @@ function CitizenSearch({ onSelect }) {
 
       {showCreate && (
         <div className="mt-2 space-y-3 rounded-lg border border-gray-200 bg-gray-50 p-4">
-          <p className="text-sm font-semibold text-gray-700">New Citizen Record</p>
+          <p className="text-sm font-semibold text-gray-700">
+            New Citizen Record
+          </p>
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
@@ -231,7 +245,10 @@ function CitizenSearch({ onSelect }) {
                 type="text"
                 value={createForm.national_id}
                 onChange={(e) =>
-                  setCreateForm((f) => ({ ...f, national_id: e.target.value }))
+                  setCreateForm((f) => ({
+                    ...f,
+                    national_id: e.target.value,
+                  }))
                 }
                 className={`mt-1 ${inputClass}`}
               />
@@ -243,7 +260,10 @@ function CitizenSearch({ onSelect }) {
                 type="text"
                 value={createForm.full_name}
                 onChange={(e) =>
-                  setCreateForm((f) => ({ ...f, full_name: e.target.value }))
+                  setCreateForm((f) => ({
+                    ...f,
+                    full_name: e.target.value,
+                  }))
                 }
                 className={`mt-1 ${inputClass}`}
               />
@@ -252,10 +272,15 @@ function CitizenSearch({ onSelect }) {
             <div>
               <label className="text-xs text-gray-500">Phone</label>
               <input
-                type="text"
+                type="tel"
+                inputMode="numeric"
+                pattern="[0-9]*"
                 value={createForm.phone_1}
                 onChange={(e) =>
-                  setCreateForm((f) => ({ ...f, phone_1: e.target.value }))
+                  setCreateForm((f) => ({
+                    ...f,
+                    phone_1: onlyNumbers(e.target.value),
+                  }))
                 }
                 className={`mt-1 ${inputClass}`}
               />
@@ -267,7 +292,10 @@ function CitizenSearch({ onSelect }) {
                 type="email"
                 value={createForm.email}
                 onChange={(e) =>
-                  setCreateForm((f) => ({ ...f, email: e.target.value }))
+                  setCreateForm((f) => ({
+                    ...f,
+                    email: e.target.value,
+                  }))
                 }
                 className={`mt-1 ${inputClass}`}
               />
@@ -279,7 +307,10 @@ function CitizenSearch({ onSelect }) {
                 type="text"
                 value={createForm.address}
                 onChange={(e) =>
-                  setCreateForm((f) => ({ ...f, address: e.target.value }))
+                  setCreateForm((f) => ({
+                    ...f,
+                    address: e.target.value,
+                  }))
                 }
                 className={`mt-1 ${inputClass}`}
               />
@@ -378,6 +409,10 @@ export default function NewComplaintForm() {
     }
 
     setFile(selected);
+
+    if (errors.attachment) {
+      setErrors((prev) => ({ ...prev, attachment: '' }));
+    }
   }
 
   function validate() {
@@ -411,6 +446,10 @@ export default function NewComplaintForm() {
 
     if (!fields.file_number.trim()) {
       errs.file_number = 'File number is required.';
+    }
+
+    if (!file) {
+      errs.attachment = 'Attachment is required.';
     }
 
     return errs;
@@ -453,19 +492,14 @@ export default function NewComplaintForm() {
       };
 
       const created = await createComplaint(payload);
-
-      if (file) {
-        try {
-          await uploadAttachment(created.complaint_id, file);
-        } catch {
-          // Non-fatal. Complaint was created, only attachment failed.
-        }
-      }
+      await uploadAttachment(created.complaint_id, file);
 
       navigate(`/complaints/${created.complaint_id}`);
     } catch (err) {
       if (err.code === 'DUPLICATE_FILE_NUMBER') {
-        setSubmitError('This generated file number already exists. Click "Generate new number" and try again.');
+        setSubmitError(
+          'This generated file number already exists. Click "Generate new number" and try again.'
+        );
         return;
       }
 
@@ -639,7 +673,11 @@ export default function NewComplaintForm() {
           />
         </Field>
 
-        <Field label={t('complaints.form.labelAttachment')} error={fileError}>
+        <Field
+          label="Attachment"
+          error={errors.attachment || fileError}
+          required
+        >
           <input
             type="file"
             accept=".pdf,.jpg,.jpeg,.png"
@@ -648,7 +686,7 @@ export default function NewComplaintForm() {
           />
 
           <p className="mt-1 text-xs text-gray-400">
-            {t('complaints.form.attachmentHint')}
+            PDF, JPEG, or PNG — max 10 MB. Required.
           </p>
         </Field>
 

@@ -8,6 +8,9 @@
  * - Pending Approval card opens Approvals page
  * - Fixed long status labels overflowing card borders
  * - Overdue is shown as an extra red badge beside the real status
+ * - Shows latest dynamic approval/rejection decision and actor
+ * - Table is horizontally scrollable so all columns remain visible
+ * - Decision column is cleaner and compact
  */
 
 import { useState, useEffect, useCallback } from 'react';
@@ -25,6 +28,19 @@ function formatDate(iso) {
     month: 'short',
     year: 'numeric',
   });
+}
+
+function formatDecision(item) {
+  if (!item?.decision_action || !item?.decision_by_name) return '—';
+
+  const action =
+    String(item.decision_action).toLowerCase() === 'approved'
+      ? 'Approved'
+      : 'Rejected';
+
+  const role = item.decision_by_role || 'Staff';
+
+  return `${action} by ${role} ${item.decision_by_name}`;
 }
 
 function isOverdueComplaint(item) {
@@ -52,7 +68,7 @@ function SortTh({ column, label, currentSort, currentDir, onSort }) {
       onClick={() => onSort(column)}
       className="cursor-pointer select-none px-4 py-3 text-left font-medium text-gray-600 transition-colors hover:bg-gray-100"
     >
-      <span className="flex items-center gap-1">
+      <span className="flex items-center gap-1 whitespace-nowrap">
         {label}
         {isActive ? (
           <span className="text-xs text-blue-500">
@@ -190,10 +206,6 @@ export default function ComplaintList() {
         sort_dir: sortDir,
       });
 
-      /*
-       * This separate request keeps the normal status cards visible even when
-       * the page is currently filtered by Overdue.
-       */
       const overviewResultPromise = getComplaints({
         search: filters.search,
         priority: filters.priority,
@@ -524,125 +536,137 @@ export default function ComplaintList() {
       {!isLoading && !error && complaints.length > 0 && (
         <>
           <div className="card overflow-hidden">
-            <table className="min-w-full divide-y divide-gray-200 text-sm">
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">
-                    {t('complaints.list.colId')}
-                  </th>
+            <div className="overflow-x-auto">
+              <table className="min-w-[1450px] divide-y divide-gray-200 text-sm">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">
+                      {t('complaints.list.colId')}
+                    </th>
 
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">
-                    File Number
-                  </th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">
+                      File Number
+                    </th>
 
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">
-                    {t('complaints.list.colTitle')}
-                  </th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">
+                      {t('complaints.list.colTitle')}
+                    </th>
 
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">
-                    Citizen ID
-                  </th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">
+                      Citizen ID
+                    </th>
 
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">
-                    {t('complaints.list.colStatus')}
-                  </th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">
+                      {t('complaints.list.colStatus')}
+                    </th>
 
-                  <SortTh
-                    column="priority"
-                    label={t('complaints.list.colPriority')}
-                    currentSort={sortBy}
-                    currentDir={sortDir}
-                    onSort={handleSort}
-                  />
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">
+                      Decision
+                    </th>
 
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">
-                    {t('complaints.list.colDepartment')}
-                  </th>
+                    <SortTh
+                      column="priority"
+                      label={t('complaints.list.colPriority')}
+                      currentSort={sortBy}
+                      currentDir={sortDir}
+                      onSort={handleSort}
+                    />
 
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">
-                    {t('complaints.list.colSubmittedBy')}
-                  </th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">
+                      {t('complaints.list.colDepartment')}
+                    </th>
 
-                  <SortTh
-                    column="submitted_at"
-                    label={t('complaints.list.colDate')}
-                    currentSort={sortBy}
-                    currentDir={sortDir}
-                    onSort={handleSort}
-                  />
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">
+                      {t('complaints.list.colSubmittedBy')}
+                    </th>
 
-                  <SortTh
-                    column="completion_deadline"
-                    label="Deadline"
-                    currentSort={sortBy}
-                    currentDir={sortDir}
-                    onSort={handleSort}
-                  />
-                </tr>
-              </thead>
+                    <SortTh
+                      column="submitted_at"
+                      label={t('complaints.list.colDate')}
+                      currentSort={sortBy}
+                      currentDir={sortDir}
+                      onSort={handleSort}
+                    />
 
-              <tbody className="divide-y divide-gray-100">
-                {complaints.map((c) => {
-                  const overdue = isOverdueComplaint(c);
+                    <SortTh
+                      column="completion_deadline"
+                      label="Deadline"
+                      currentSort={sortBy}
+                      currentDir={sortDir}
+                      onSort={handleSort}
+                    />
+                  </tr>
+                </thead>
 
-                  return (
-                    <tr
-                      key={c.complaint_id}
-                      onClick={() => navigate(`/complaints/${c.complaint_id}`)}
-                      className="cursor-pointer transition-colors hover:bg-blue-50/70"
-                    >
-                      <td className="px-4 py-3 font-mono text-gray-500">
-                        #{c.complaint_id}
-                      </td>
+                <tbody className="divide-y divide-gray-100">
+                  {complaints.map((c) => {
+                    const overdue = isOverdueComplaint(c);
 
-                      <td className="px-4 py-3 font-mono text-gray-700">
-                        {c.file_number || '—'}
-                      </td>
+                    return (
+                      <tr
+                        key={c.complaint_id}
+                        onClick={() => navigate(`/complaints/${c.complaint_id}`)}
+                        className="cursor-pointer transition-colors hover:bg-blue-50/70"
+                      >
+                        <td className="px-4 py-3 font-mono text-gray-500">
+                          #{c.complaint_id}
+                        </td>
 
-                      <td className="px-4 py-3 font-medium text-gray-900">
-                        {c.title}
-                      </td>
+                        <td className="px-4 py-3 font-mono text-gray-700">
+                          {c.file_number || '—'}
+                        </td>
 
-                      <td className="px-4 py-3 font-mono text-gray-600">
-                        {c.citizen_national_id || '—'}
-                      </td>
+                        <td className="px-4 py-3 font-medium text-gray-900">
+                          {c.title}
+                        </td>
 
-                      <td className="px-4 py-3">
-                        <div className="flex flex-wrap gap-2">
-                          <StatusBadge statusName={c.status_name} />
+                        <td className="px-4 py-3 font-mono text-gray-600">
+                          {c.citizen_national_id || '—'}
+                        </td>
 
-                          {overdue && (
-                            <span className="inline-flex items-center rounded-full border border-red-200 bg-red-50 px-3 py-1 text-xs font-semibold text-red-700">
-                              Overdue
-                            </span>
-                          )}
-                        </div>
-                      </td>
+                        <td className="px-4 py-3">
+                          <div className="flex flex-wrap gap-2">
+                            <StatusBadge statusName={c.status_name} />
 
-                      <td className="px-4 py-3">
-                        <PriorityBadge priority={c.priority} />
-                      </td>
+                            {overdue && (
+                              <span className="inline-flex items-center rounded-full border border-red-200 bg-red-50 px-3 py-1 text-xs font-semibold text-red-700">
+                                Overdue
+                              </span>
+                            )}
+                          </div>
+                        </td>
 
-                      <td className="px-4 py-3 text-gray-600">
-                        {c.department_name ?? '—'}
-                      </td>
+                        <td className="max-w-[170px] px-4 py-3 text-gray-600">
+                          <span className="block text-xs leading-5">
+                            {formatDecision(c)}
+                          </span>
+                        </td>
 
-                      <td className="px-4 py-3 text-gray-600">
-                        {c.submitted_by_name}
-                      </td>
+                        <td className="px-4 py-3">
+                          <PriorityBadge priority={c.priority} />
+                        </td>
 
-                      <td className="px-4 py-3 text-gray-600">
-                        {formatDate(c.submitted_at)}
-                      </td>
+                        <td className="px-4 py-3 text-gray-600">
+                          {c.department_name ?? '—'}
+                        </td>
 
-                      <td className="px-4 py-3 text-gray-600">
-                        {formatDate(c.completion_deadline)}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                        <td className="px-4 py-3 text-gray-600">
+                          {c.submitted_by_name}
+                        </td>
+
+                        <td className="px-4 py-3 text-gray-600">
+                          {formatDate(c.submitted_at)}
+                        </td>
+
+                        <td className="px-4 py-3 text-gray-600">
+                          {formatDate(c.completion_deadline)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
 
           {pagination && pagination.totalPages > 1 && (
