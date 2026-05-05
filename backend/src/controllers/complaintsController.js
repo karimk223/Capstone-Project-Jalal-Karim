@@ -28,7 +28,7 @@ function deriveAction(toStatusId) {
   return 'submitted';
 }
 
-function applySharedFilters(query, conditions, params) {
+function applySharedFilters(query, conditions, params, user) {
   const {
     search,
     department_id,
@@ -40,6 +40,7 @@ function applySharedFilters(query, conditions, params) {
     file_number,
     overdue,
     resolved_this_month,
+    my_submitted,
   } = query;
 
   if (department_id) {
@@ -80,6 +81,11 @@ function applySharedFilters(query, conditions, params) {
   if (search && search.trim()) {
     conditions.push('(ci.national_id LIKE ? OR c.file_number LIKE ?)');
     params.push(`%${search.trim()}%`, `%${search.trim()}%`);
+  }
+
+  if (my_submitted === '1' || my_submitted === 'true') {
+    conditions.push('c.submitted_by = ?');
+    params.push(Number(user.staff_id));
   }
 
   if (overdue === '1' || overdue === 'true') {
@@ -128,7 +134,8 @@ async function canTransitionComplaint({ conn, complaint, req, toStatusId }) {
     return {
       allowed: false,
       code: 'ADMIN_WORKFLOW_FORBIDDEN',
-      message: 'Admins manage users and lookup tables, but cannot change complaint workflow status.',
+      message:
+        'Admins manage users and lookup tables, but cannot change complaint workflow status.',
     };
   }
 
@@ -149,7 +156,8 @@ async function canTransitionComplaint({ conn, complaint, req, toStatusId }) {
       return {
         allowed: false,
         code: 'FORBIDDEN_OWNER',
-        message: 'Clerks can only change workflow status for complaints they submitted.',
+        message:
+          'Clerks can only change workflow status for complaints they submitted.',
       };
     }
 
@@ -178,7 +186,8 @@ async function canTransitionComplaint({ conn, complaint, req, toStatusId }) {
       return {
         allowed: false,
         code: 'MINISTER_DECISION_LOCKED',
-        message: 'A Minister decision already exists. Directors cannot override or change a Minister decision.',
+        message:
+          'A Minister decision already exists. Directors cannot override or change a Minister decision.',
       };
     }
 
@@ -197,7 +206,8 @@ async function canTransitionComplaint({ conn, complaint, req, toStatusId }) {
           return {
             allowed: false,
             code: 'DIRECTOR_DECISION_FORBIDDEN',
-            message: 'Directors can only edit their own approval/rejection decision, and cannot change another user’s decision.',
+            message:
+              'Directors can only edit their own approval/rejection decision, and cannot change another user’s decision.',
           };
         }
       }
@@ -208,7 +218,8 @@ async function canTransitionComplaint({ conn, complaint, req, toStatusId }) {
     return {
       allowed: false,
       code: 'INVALID_DIRECTOR_TRANSITION',
-      message: 'This workflow transition is not allowed for Directors from the current status.',
+      message:
+        'This workflow transition is not allowed for Directors from the current status.',
     };
   }
 
@@ -230,7 +241,8 @@ async function canTransitionComplaint({ conn, complaint, req, toStatusId }) {
     return {
       allowed: false,
       code: 'INVALID_MINISTER_TRANSITION',
-      message: 'This workflow transition is not allowed for Ministers from the current status.',
+      message:
+        'This workflow transition is not allowed for Ministers from the current status.',
     };
   }
 
@@ -252,7 +264,8 @@ function canEditComplaint({ complaint, req }) {
     return {
       allowed: false,
       code: 'ADMIN_EDIT_FORBIDDEN',
-      message: 'Admins manage system users and lookup tables, but cannot edit complaint details.',
+      message:
+        'Admins manage system users and lookup tables, but cannot edit complaint details.',
     };
   }
 
@@ -269,7 +282,8 @@ function canEditComplaint({ complaint, req }) {
       return {
         allowed: false,
         code: 'INVALID_EDIT_STATUS',
-        message: 'Clerks can edit their complaint only while it is Submitted or Rejected. If it was rejected, return it to Submitted and add the new supporting details.',
+        message:
+          'Clerks can edit their complaint only while it is Submitted or Rejected. If it was rejected, return it to Submitted and add the new supporting details.',
       };
     }
 
@@ -321,7 +335,7 @@ exports.list = async (req, res) => {
     const params = [];
     const conditions = ['1=1'];
 
-    applySharedFilters(req.query, conditions, params);
+    applySharedFilters(req.query, conditions, params, req.user);
 
     if (status_id) {
       conditions.push('c.status_id = ?');
@@ -337,7 +351,7 @@ exports.list = async (req, res) => {
     const statusCountParams = [];
     const statusCountConditions = ['1=1'];
 
-    applySharedFilters(req.query, statusCountConditions, statusCountParams);
+    applySharedFilters(req.query, statusCountConditions, statusCountParams, req.user);
 
     const statusCountWhere = statusCountConditions.join(' AND ');
 
@@ -773,12 +787,7 @@ exports.transition = async (req, res) => {
         `INSERT INTO APPROVALS
            (complaint_id, approver_id, action, comment, action_at)
          VALUES (?, ?, ?, ?, NOW())`,
-        [
-          complaintId,
-          staffId,
-          deriveAction(toStatusId),
-          comment || null,
-        ]
+        [complaintId, staffId, deriveAction(toStatusId), comment || null]
       );
     }
 
@@ -786,13 +795,7 @@ exports.transition = async (req, res) => {
       `INSERT INTO TRACKING
          (complaint_id, changed_by, from_status_id, to_status_id, notes, changed_at)
        VALUES (?, ?, ?, ?, ?, NOW())`,
-      [
-        complaintId,
-        staffId,
-        complaint.status_id,
-        toStatusId,
-        comment || null,
-      ]
+      [complaintId, staffId, complaint.status_id, toStatusId, comment || null]
     );
 
     let resolvedAtSql = '';

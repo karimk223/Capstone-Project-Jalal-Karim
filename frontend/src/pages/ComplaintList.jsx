@@ -11,6 +11,8 @@
  * - Shows latest dynamic approval/rejection decision and actor
  * - Table is horizontally scrollable so all columns remain visible
  * - Decision column is cleaner and compact
+ * - Added filter for complaints submitted by the logged-in user
+ * - From and To date filters are stacked vertically
  */
 
 import { useState, useEffect, useCallback } from 'react';
@@ -159,6 +161,7 @@ export default function ComplaintList() {
     open: searchParams.get('open') || '',
     overdue: searchParams.get('overdue') || '',
     resolved_this_month: searchParams.get('resolved_this_month') || '',
+    my_submitted: searchParams.get('my_submitted') || '',
   });
 
   const [page, setPage] = useState(Number(searchParams.get('page')) || 1);
@@ -211,6 +214,7 @@ export default function ComplaintList() {
         priority: filters.priority,
         date_from: filters.date_from,
         date_to: filters.date_to,
+        my_submitted: filters.my_submitted,
         page: 1,
         limit: 1,
         sort_by: sortBy,
@@ -222,6 +226,7 @@ export default function ComplaintList() {
         priority: filters.priority,
         date_from: filters.date_from,
         date_to: filters.date_to,
+        my_submitted: filters.my_submitted,
         overdue: '1',
         page: 1,
         limit: 1,
@@ -275,6 +280,7 @@ export default function ComplaintList() {
       open: '',
       overdue: '',
       resolved_this_month: '',
+      my_submitted: '',
     });
 
     setPage(1);
@@ -397,7 +403,7 @@ export default function ComplaintList() {
         </div>
       </section>
 
-      <div className="card mb-4 flex flex-wrap items-end gap-3 p-4">
+      <div className="card mb-4 flex flex-wrap items-start gap-3 p-4">
         <div className="flex min-w-[280px] flex-1 flex-col gap-1">
           <label className="text-xs font-medium text-gray-600">
             Search by Citizen ID or File Number
@@ -454,42 +460,66 @@ export default function ComplaintList() {
 
         <div className="flex flex-col gap-1">
           <label className="text-xs font-medium text-gray-600">
-            {t('complaints.list.filterFrom')}
+            Submitted By
           </label>
 
-          <input
-            type="date"
-            name="date_from"
-            value={filters.date_from}
+          <select
+            name="my_submitted"
+            value={filters.my_submitted}
             onChange={handleFilterChange}
             className="input-field py-1.5"
-          />
+          >
+            <option value="">All complaints</option>
+            <option value="1">Complaints I submitted</option>
+          </select>
         </div>
 
-        <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium text-gray-600">
-            {t('complaints.list.filterTo')}
-          </label>
+        <div className="flex min-w-[190px] flex-col gap-3">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-gray-600">
+              {t('complaints.list.filterFrom')}
+            </label>
 
-          <input
-            type="date"
-            name="date_to"
-            value={filters.date_to}
-            onChange={handleFilterChange}
-            className="input-field py-1.5"
-          />
+            <input
+              type="date"
+              name="date_from"
+              value={filters.date_from}
+              onChange={handleFilterChange}
+              className="input-field py-1.5"
+            />
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-gray-600">
+              {t('complaints.list.filterTo')}
+            </label>
+
+            <input
+              type="date"
+              name="date_to"
+              value={filters.date_to}
+              onChange={handleFilterChange}
+              className="input-field py-1.5"
+            />
+          </div>
         </div>
 
         {hasAnyFilter && (
           <button
             type="button"
             onClick={clearFilters}
-            className="btn-secondary self-end py-1.5"
+            className="btn-secondary mt-6 py-1.5"
           >
             {t('complaints.list.clearFilters')}
           </button>
         )}
       </div>
+
+      {filters.my_submitted && (
+        <div className="mb-4 rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm text-indigo-700">
+          Showing only complaints submitted by you.
+        </div>
+      )}
 
       {filters.overdue && (
         <div className="mb-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
